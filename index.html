@@ -51,12 +51,6 @@
         </div>
       </div>
     </div>
-
-    <!-- Horizontale Scrollleiste (sichtbar wenn reingezoomt) -->
-    <div id="track-scroll" x-show="canScroll" x-cloak>
-      <input type="range" min="0" max="1" step="0.001" :value="scrollPos"
-             @input="onScrollSlider($event.target.value)" aria-label="Track scrollen" />
-    </div>
   </section>
 
   <!-- ===== Controls-Leiste ===== -->

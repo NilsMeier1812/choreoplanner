@@ -7,7 +7,7 @@
    - Supabase REST/Storage -> Netz (kein SW-Cache; Audio liegt in IndexedDB/Dexie).
    ========================================================================== */
 
-const VERSION = 'v10';
+const VERSION = 'v11';
 const SHELL_CACHE = `choreo-shell-${VERSION}`;
 const CDN_CACHE = `choreo-cdn-${VERSION}`;
 
