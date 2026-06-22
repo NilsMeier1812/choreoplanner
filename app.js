@@ -40,6 +40,9 @@ const debounceTimers = {};         // segId -> timeout
 const pendingEdits = {};           // segId -> { feld: wert } (für visibilitychange-Flush)
 let lastActiveSegmentId = null;
 let loadToken = 0;                 // verhindert Race bei schnellem Projektwechsel
+let audioSource = null;           // 'cache' | 'network' – woher der aktuelle Blob stammt
+let audioRefetchTried = false;    // verhindert Endlosschleife bei kaputtem Blob
+let audioTimeout = null;          // Sicherheits-Timeout gegen ewiges "Lade Audio"
 
 /* ---------- Hilfen ---------- */
 function uuid() {
@@ -187,42 +190,76 @@ Alpine.data('choreo', () => ({
     await this.loadAudio(p);
   },
 
-  /* ===================== Audio (Hybrid-Cache) ===================== */
+  /* ===================== Audio (Hybrid-Cache) =====================
+     Spinner/Status werden über die Wavesurfer-Events 'ready'/'decode'/'error'
+     gesteuert, NICHT über das load()-Promise (das in v7 hängen bleiben kann). */
   async loadAudio(project) {
     this.audioLoading = true;
     this.audioError = null;
+    audioRefetchTried = false;
     const token = loadToken;
 
-    // 1. lokal vorhanden?
-    const cached = await db.audioCache.get(project.id).catch(() => null);
-    if (cached && cached.blob) {
-      try {
-        await this.wsLoadBlob(cached.blob);
-        if (token === loadToken) this.audioLoading = false;
-        return;
-      } catch (e) {
-        // 4. iOS Eviction Edge-Case: korrupter Blob -> löschen, neu laden
-        await db.audioCache.delete(project.id).catch(() => {});
+    // Sicherheits-Timeout: nie ewig "Lade Audio…" anzeigen
+    clearTimeout(audioTimeout);
+    audioTimeout = setTimeout(() => {
+      if (token === loadToken && this.audioLoading) {
+        this.audioLoading = false;
+        this.audioError = 'Audio-Dekodierung hat zu lange gedauert. Erneut versuchen? (Tipp: MP3/WAV sind am kompatibelsten.)';
       }
-    }
-    if (token !== loadToken) return;
+    }, 40000);
 
-    // 3. fetch von Supabase
+    // 1. lokal vorhanden? -> 2. Blob an Wavesurfer
+    const cached = await db.audioCache.get(project.id).catch(() => null);
+    if (token !== loadToken) return;
+    if (cached && cached.blob) {
+      audioSource = 'cache';
+      this.wsLoadBlob(cached.blob).catch((e) => this.handleAudioError(e));
+      return;
+    }
+    // 3. nicht vorhanden -> von Supabase laden
+    await this.loadAudioFromNetwork(project, token);
+  },
+
+  async loadAudioFromNetwork(project, token) {
+    audioSource = 'network';
     try {
       const res = await fetch(project.audio_url);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const blob = await res.blob();
       await db.audioCache.put({ projectId: project.id, blob, cachedAt: Date.now() }).catch(() => {});
       if (token !== loadToken) return;
-      await this.wsLoadBlob(blob);
-      if (token === loadToken) this.audioLoading = false;
+      this.wsLoadBlob(blob).catch((e) => this.handleAudioError(e));
     } catch (e) {
       if (token !== loadToken) return;
+      clearTimeout(audioTimeout);
       this.audioLoading = false;
       this.audioError = navigator.onLine
         ? ('Audio konnte nicht geladen werden: ' + e.message)
         : 'Offline – dieses Audio ist nicht im Cache verfügbar.';
     }
+  },
+
+  onAudioReady() {
+    clearTimeout(audioTimeout);
+    this.audioLoading = false;
+    this.audioError = null;
+    if (ws) this.duration = ws.getDuration();
+    this.renderRegions();
+  },
+
+  handleAudioError(err) {
+    // 4. iOS-Eviction / korrupter Blob: aus dem Cache werfen und einmal neu laden
+    if (audioSource === 'cache' && !audioRefetchTried && this.project && navigator.onLine) {
+      audioRefetchTried = true;
+      db.audioCache.delete(this.project.id).catch(() => {});
+      this.loadAudioFromNetwork(this.project, loadToken);
+      return;
+    }
+    clearTimeout(audioTimeout);
+    this.audioLoading = false;
+    this.audioError = navigator.onLine
+      ? 'Audio konnte nicht dekodiert werden. Erneut versuchen? (Tipp: MP3/WAV sind am kompatibelsten.)'
+      : 'Offline – dieses Audio ist nicht im Cache verfügbar.';
   },
 
   wsLoadBlob(blob) {
@@ -252,15 +289,14 @@ Alpine.data('choreo', () => ({
     });
     wsRegions = ws.registerPlugin(RegionsPlugin.create());
 
-    ws.on('ready', () => {
-      this.duration = ws.getDuration();
-      this.renderRegions();
-    });
+    // 'ready'/'decode' sind die verlässlichen Signale (das load()-Promise kann hängen)
+    ws.on('ready', () => this.onAudioReady());
+    ws.on('decode', () => this.onAudioReady());
     ws.on('play', () => { this.isPlaying = true; });
     ws.on('pause', () => { this.isPlaying = false; });
     ws.on('finish', () => { this.isPlaying = false; });
     ws.on('timeupdate', (t) => this.onTimeUpdate(t));
-    ws.on('error', (err) => { /* Decode-Fehler werden in loadAudio via Promise abgefangen */ console.warn('ws error', err); });
+    ws.on('error', (err) => this.handleAudioError(err));
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
