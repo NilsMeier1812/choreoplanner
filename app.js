@@ -12,7 +12,7 @@ import TimelinePlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/pl
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 8;
+const APP_VERSION = 9;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -75,6 +75,7 @@ Alpine.data('choreo', () => ({
   /* --- UI --- */
   version: APP_VERSION,
   menuOpen: false,
+  settingsOpen: false,
   online: navigator.onLine,
   toast: '',
   _toastTimer: null,
@@ -92,7 +93,8 @@ Alpine.data('choreo', () => ({
   activeSegmentId: null,
   zoom: 0,                          // minPxPerSec (0 = fit)
   gridOffset: 0,                    // Beat-Raster-Offset in Sekunden (z.B. Intro)
-  _offsetSaveTimer: null,
+  _projSaveTimer: null,
+  _projPending: null,
 
   /* --- Audio-Lade-Status --- */
   audioLoading: false,
@@ -112,6 +114,11 @@ Alpine.data('choreo', () => ({
   /* --- abgeleitet --- */
   get sortedSegments() {
     return [...this.segments].sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
+  },
+  get barLength() {
+    if (!this.project) return 0;
+    const bpb = parseInt((this.project.time_signature || '4/4').split('/')[0], 10) || 4;
+    return (60 / (Number(this.project.bpm) || 120)) * bpb;
   },
 
   /* ===================== Init ===================== */
@@ -346,32 +353,71 @@ Alpine.data('choreo', () => ({
   nudgeGrid(d) {
     this.gridOffset = Math.max(0, Math.round((this.gridOffset + d) * 1000) / 1000);
     this.applyGridOffset();
-    this.saveGridOffset();
+    this.patchProject({ grid_offset: this.gridOffset });
   },
   setGridToCursor() {
     this.gridOffset = ws ? Math.round(ws.getCurrentTime() * 1000) / 1000 : 0;
     this.applyGridOffset();
-    this.saveGridOffset();
+    this.patchProject({ grid_offset: this.gridOffset });
   },
   resetGrid() {
     this.gridOffset = 0;
     this.applyGridOffset();
-    this.saveGridOffset();
+    this.patchProject({ grid_offset: this.gridOffset });
   },
-  saveGridOffset() {
+
+  /* ===================== Projekt-Einstellungen / Kalibrierung ===================== */
+  openSettings() { if (this.project) this.settingsOpen = true; },
+  closeSettings() { this.settingsOpen = false; },
+
+  setTimeSig(v) {
+    this.patchProject({ time_signature: v });
+    this.applyGridOffset();
+  },
+  onBpmInput(v) {
+    let n = parseFloat(v);
+    if (isNaN(n)) return;
+    n = Math.min(400, Math.max(20, Math.round(n * 100) / 100));
+    this.patchProject({ bpm: n });
+    this.applyGridOffset();
+  },
+  nudgeBpm(d) {
+    let n = (Number(this.project.bpm) || 120) + d;
+    n = Math.min(400, Math.max(20, Math.round(n * 100) / 100));
+    this.patchProject({ bpm: n });
+    this.applyGridOffset();
+  },
+  // Takt-Länge (Abstand dicker Linien) direkt nudgen -> rechnet auf BPM zurück
+  nudgeBarLength(deltaSec) {
+    const bpb = parseInt((this.project.time_signature || '4/4').split('/')[0], 10) || 4;
+    const next = Math.max(0.05, this.barLength + deltaSec);
+    let bpm = Math.min(400, Math.max(20, Math.round((60 * bpb / next) * 100) / 100));
+    this.patchProject({ bpm });
+    this.applyGridOffset();
+  },
+
+  /* lokal sofort anwenden + gebündelt/debounced nach Supabase (mit Offline-Queue) */
+  patchProject(patch) {
     if (!this.project) return;
+    Object.assign(this.project, patch);
+    const idx = this.projects.findIndex(p => p.id === this.project.id);
+    if (idx >= 0) Object.assign(this.projects[idx], patch);
+    db.projects.put(JSON.parse(JSON.stringify(this.project))).catch(() => {});
+
+    this._projPending = Object.assign(this._projPending || {}, patch);
     const pid = this.project.id;
-    const val = this.gridOffset;
-    clearTimeout(this._offsetSaveTimer);
-    this._offsetSaveTimer = setTimeout(async () => {
-      db.projects.put(JSON.parse(JSON.stringify(this.project))).catch(() => {});
+    clearTimeout(this._projSaveTimer);
+    this._projSaveTimer = setTimeout(async () => {
+      const payload = this._projPending; this._projPending = null;
+      if (!payload) return;
       try {
         const { error } = await sb.from('projects')
-          .update({ grid_offset: val, updated_at: new Date().toISOString() }).eq('id', pid);
+          .update(Object.assign({}, payload, { updated_at: new Date().toISOString() }))
+          .eq('id', pid);
         if (error) throw error;
       } catch (e) {
-        this.queue('projects', 'update', pid, { grid_offset: val });
-        this.setStatus('Offline – Raster-Offset gespeichert');
+        this.queue('projects', 'update', pid, payload);
+        this.setStatus('Offline – Einstellung gespeichert, wird synchronisiert');
       }
     }, 500);
   },

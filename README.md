@@ -20,6 +20,9 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS locked_by_name TEXT;
 
 -- Beat-Raster-Offset in Sekunden (z.B. Intro vor dem ersten Takt)
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_offset NUMERIC(8,3) DEFAULT 0;
+
+-- BPM mit Dezimalstellen (krumme BPM-Werte fein justierbar)
+ALTER TABLE projects ALTER COLUMN bpm TYPE NUMERIC(6,2) USING bpm::numeric;
 ```
 
 Ohne `locked_by_name` schlägt das Wechseln in den Editor-Modus fehl (Sperre kann
