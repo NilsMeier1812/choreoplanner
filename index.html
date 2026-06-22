@@ -62,6 +62,17 @@
     <button x-show="currentMode === 'editor'" class="primary" @click="addSegmentAtCursor()">＋ Marke</button>
   </div>
 
+  <!-- ===== Raster-Offset (nur Editor) ===== -->
+  <div id="grid-bar" x-show="currentMode === 'editor'" x-cloak>
+    <span class="gb-label">Raster-Start</span>
+    <button class="icon" @click="nudgeGrid(-0.05)" aria-label="früher">−</button>
+    <span class="gb-val" x-text="gridOffset.toFixed(2) + ' s'"></span>
+    <button class="icon" @click="nudgeGrid(0.05)" aria-label="später">+</button>
+    <span class="spacer"></span>
+    <button @click="setGridToCursor()">🎯 hier starten</button>
+    <button class="icon" @click="resetGrid()" aria-label="Zurücksetzen">⟲</button>
+  </div>
+
   <!-- ===== Notiz-/Segmentbereich (untere zwei Drittel) ===== -->
   <section id="notes-section">
     <div class="notes-head">
@@ -145,9 +156,9 @@
             </div>
           </div>
           <div class="field">
-            <label>Audio-Datei (WAV / MP3)</label>
+            <label>Audio-Datei (MP3 / WAV)</label>
             <label class="filedrop">
-              <input type="file" accept="audio/*,.wav,.mp3,.m4a" style="display:none" @change="onFilePick($event)" />
+              <input type="file" accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav" style="display:none" @change="onFilePick($event)" />
               <template x-if="!form.file"><span>Tippen, um Datei zu wählen</span></template>
               <template x-if="form.file"><span><strong x-text="form.file.name"></strong><br><span x-text="prettySize(form.file.size)"></span></span></template>
             </label>
