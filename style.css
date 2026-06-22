@@ -136,6 +136,24 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 #controls-bar .spacer { flex: 1; }
 .play-btn { width: 46px; height: 46px; border-radius: 50%; font-size: 20px; background: var(--accent); border-color: var(--accent); color: #0b1020; }
 
+/* ===== Raster-Offset-Leiste (Editor) ===== */
+#grid-bar {
+  height: 46px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+#grid-bar .gb-label { color: var(--muted); font-size: 12px; }
+#grid-bar .gb-val { font-variant-numeric: tabular-nums; min-width: 52px; text-align: center; }
+#grid-bar .icon { width: 34px; height: 34px; }
+#grid-bar .spacer { flex: 1; }
+#grid-bar button:not(.icon) { padding: 6px 10px; font-size: 13px; }
+
 /* ===== Notiz-/Segmentbereich (untere zwei Drittel) ===== */
 #notes-section {
   flex-grow: 1;

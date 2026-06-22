@@ -15,11 +15,29 @@ braucht die `projects`-Tabelle **eine zusätzliche Spalte**. Bitte einmal im
 Supabase SQL-Editor ausführen:
 
 ```sql
+-- Name des Sperrenden (Anzeige "Wird von Anna bearbeitet")
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS locked_by_name TEXT;
+
+-- Beat-Raster-Offset in Sekunden (z.B. Intro vor dem ersten Takt)
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS grid_offset NUMERIC(8,3) DEFAULT 0;
 ```
 
-Ohne diese Spalte schlägt das Wechseln in den Editor-Modus fehl (Sperre kann nicht
-gesetzt werden).
+Ohne `locked_by_name` schlägt das Wechseln in den Editor-Modus fehl (Sperre kann
+nicht gesetzt werden). Ohne `grid_offset` lässt sich der Raster-Start nicht speichern.
+
+Außerdem brauchen `anon`/`authenticated` Tabellen- und Storage-Rechte (RLS ist aus):
+
+```sql
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on all tables in schema public to anon, authenticated;
+alter default privileges in schema public
+  grant select, insert, update, delete on tables to anon, authenticated;
+
+-- Storage: Upload in den (öffentlichen) Bucket erlauben
+create policy "audio-tracks anon all" on storage.objects
+  for all to anon, authenticated
+  using (bucket_id = 'audio-tracks') with check (bucket_id = 'audio-tracks');
+```
 
 ## Dateien
 
@@ -42,6 +60,13 @@ gesetzt werden).
   30 s), Heartbeat alle 15 s. Auto-Scroll deaktiviert. „＋ Marke" setzt an der
   Cursor-Position eine Sprungmarke; Marken sind in der Waveform verschiebbar.
   Tippen wird mit 1 s Debounce gespeichert.
+- **Raster-Start (Editor)**: verschiebt das Beat-Raster, falls das Lied ein Intro
+  hat. An die gewünschte Stelle spulen → „🎯 hier starten", oder mit −/+ in 50-ms-
+  Schritten feinjustieren. „⟲" setzt zurück. Wird in `projects.grid_offset` gespeichert.
+
+> **Audioformat:** Es werden nur **MP3** und **WAV** akzeptiert. m4a/AAC wird
+> bewusst abgelehnt, da die Web-Audio-Dekodierung der Waveform nicht in allen
+> Browsern funktioniert.
 
 ## Offline-Verhalten
 

@@ -33,6 +33,7 @@ db.version(1).stores({
 /* ---------- Modul-Zustand (nicht in Alpine-Reaktivität, um WS-Proxy-Probleme zu vermeiden) ---------- */
 let ws = null;
 let wsRegions = null;
+let wsTimeline = null;
 let app = null;                    // Referenz auf die Alpine-Komponente
 let heartbeatTimer = null;
 let currentObjectUrl = null;
@@ -86,6 +87,8 @@ Alpine.data('choreo', () => ({
   duration: 0,
   activeSegmentId: null,
   zoom: 0,                          // minPxPerSec (0 = fit)
+  gridOffset: 0,                    // Beat-Raster-Offset in Sekunden (z.B. Intro)
+  _offsetSaveTimer: null,
 
   /* --- Audio-Lade-Status --- */
   audioLoading: false,
@@ -175,6 +178,7 @@ Alpine.data('choreo', () => ({
     this.currentMode = 'training';
     this.menuOpen = false;
     this.project = p;
+    this.gridOffset = Number(p.grid_offset) || 0;
     localStorage.setItem('choreo_last_project', p.id);
     this.activeSegmentId = null;
     lastActiveSegmentId = null;
@@ -273,6 +277,7 @@ Alpine.data('choreo', () => ({
     const container = document.getElementById('waveform');
     const h = Math.max(60, container.clientHeight - 24);
 
+    const timeline = TimelinePlugin.create(this.timelineOptions(project));
     ws = WaveSurfer.create({
       container,
       height: h,
@@ -285,8 +290,9 @@ Alpine.data('choreo', () => ({
       barRadius: 2,
       minPxPerSec: this.zoom || 1,
       fillParent: true,
-      plugins: [TimelinePlugin.create(this.timelineOptions(project))]
+      plugins: [timeline]
     });
+    wsTimeline = timeline;
     wsRegions = ws.registerPlugin(RegionsPlugin.create());
 
     // 'ready'/'decode' sind die verlässlichen Signale (das load()-Promise kann hängen)
@@ -307,8 +313,9 @@ Alpine.data('choreo', () => ({
     const beatsPerBar = parseInt((project.time_signature || '4/4').split('/')[0], 10) || 4;
     return {
       height: 16,
-      timeInterval: secondsPerBeat,          // ein Tick pro Beat
-      primaryLabelInterval: beatsPerBar,     // dicke Linie/Label pro Takt
+      timeInterval: secondsPerBeat,            // ein Tick pro Beat
+      primaryLabelInterval: beatsPerBar,       // dicke Linie/Label pro Takt
+      timeOffset: Number(this.gridOffset) || 0,// Raster nach Intro verschieben
       style: { fontSize: '9px', color: '#888' },
       formatTimeCallback: (sec) => {
         const beat = Math.round(sec / secondsPerBeat);
@@ -318,9 +325,51 @@ Alpine.data('choreo', () => ({
     };
   },
 
+  /* Raster-Offset live aktualisieren: nur das Timeline-Plugin neu aufbauen
+     (kein erneutes Laden/Dekodieren des Audios). */
+  applyGridOffset() {
+    if (!ws) return;
+    if (this.project) this.project.grid_offset = this.gridOffset;
+    try { if (wsTimeline) wsTimeline.destroy(); } catch (e) {}
+    wsTimeline = ws.registerPlugin(TimelinePlugin.create(this.timelineOptions(this.project || {})));
+  },
+
+  nudgeGrid(d) {
+    this.gridOffset = Math.max(0, Math.round((this.gridOffset + d) * 1000) / 1000);
+    this.applyGridOffset();
+    this.saveGridOffset();
+  },
+  setGridToCursor() {
+    this.gridOffset = ws ? Math.round(ws.getCurrentTime() * 1000) / 1000 : 0;
+    this.applyGridOffset();
+    this.saveGridOffset();
+  },
+  resetGrid() {
+    this.gridOffset = 0;
+    this.applyGridOffset();
+    this.saveGridOffset();
+  },
+  saveGridOffset() {
+    if (!this.project) return;
+    const pid = this.project.id;
+    const val = this.gridOffset;
+    clearTimeout(this._offsetSaveTimer);
+    this._offsetSaveTimer = setTimeout(async () => {
+      db.projects.put(JSON.parse(JSON.stringify(this.project))).catch(() => {});
+      try {
+        const { error } = await sb.from('projects')
+          .update({ grid_offset: val, updated_at: new Date().toISOString() }).eq('id', pid);
+        if (error) throw error;
+      } catch (e) {
+        this.queue('projects', 'update', pid, { grid_offset: val });
+        this.setStatus('Offline – Raster-Offset gespeichert');
+      }
+    }, 500);
+  },
+
   destroyWs() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    if (ws) { try { ws.destroy(); } catch (e) {} ws = null; wsRegions = null; }
+    if (ws) { try { ws.destroy(); } catch (e) {} ws = null; wsRegions = null; wsTimeline = null; }
     if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
   },
 
@@ -622,7 +671,17 @@ Alpine.data('choreo', () => ({
   /* ===================== Upload / Projekt anlegen ===================== */
   onFilePick(e) {
     const f = e.target.files && e.target.files[0];
-    if (f) { this.form.file = f; this.uploadError = null; if (!this.form.title) this.form.title = f.name.replace(/\.[^.]+$/, ''); }
+    if (!f) return;
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    if (!['mp3', 'wav'].includes(ext)) {
+      this.uploadError = 'Nur MP3 oder WAV werden unterstützt (m4a/AAC ist mit vielen Browsern nicht kompatibel).';
+      this.form.file = null;
+      e.target.value = '';
+      return;
+    }
+    this.form.file = f;
+    this.uploadError = null;
+    if (!this.form.title) this.form.title = f.name.replace(/\.[^.]+$/, '');
   },
 
   prettySize(bytes) {
