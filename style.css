@@ -277,6 +277,17 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   overflow: hidden;
 }
 .modal .body { padding: 16px; }
+.modal.modal-lg { width: min(94vw, 460px); max-height: 88dvh; display: flex; flex-direction: column; }
+.modal.modal-lg .body { overflow-y: auto; }
+.modal .hint { font-size: 12px; color: var(--muted); margin: 0 2px 8px; line-height: 1.4; }
+.calib-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.calib-row .icon { flex: 1; width: auto; min-width: 0; font-size: 13px; }
+.calib-row button:not(.icon) { padding: 10px 12px; }
+.calib-val {
+  flex: 1.4; text-align: center; font-variant-numeric: tabular-nums;
+  font-weight: 600; font-size: 16px; padding: 8px 6px;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+}
 
 /* ===== Status-Toast & Badges ===== */
 #toast {
