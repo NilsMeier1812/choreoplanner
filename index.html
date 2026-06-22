@@ -1,1 +1,200 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#121212" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>Choreo-Planer</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./assets/apple-touch-icon.png" />
+  <link rel="icon" href="./assets/icon-192.png" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body x-data="choreo" x-init="init()" x-cloak>
 
+  <!-- ===== Audio-Bereich (oberes Drittel) ===== -->
+  <section id="audio-section">
+    <div class="topbar">
+      <button class="icon" @click="menuOpen = true" aria-label="Menü">☰</button>
+      <div class="title">
+        <span x-text="project ? project.title : 'Kein Projekt'"></span>
+        <template x-if="project">
+          <span class="meta" x-text="` · ${project.bpm} BPM · ${project.time_signature}`"></span>
+        </template>
+      </div>
+      <span x-show="!online" class="badge offline">offline</span>
+      <div class="mode-toggle" x-show="project">
+        <button :class="{ active: currentMode === 'training' }"
+                @click="currentMode === 'editor' && toggleMode()">Training</button>
+        <button :class="{ active: currentMode === 'editor' }"
+                @click="currentMode === 'training' && toggleMode()">Editor</button>
+      </div>
+    </div>
+
+    <div id="waveform">
+      <div class="loading-overlay" x-show="audioLoading" x-cloak>
+        <div class="spinner"></div>
+        <div>Lade Audio…</div>
+      </div>
+      <div class="loading-overlay" x-show="audioError" x-cloak>
+        <div class="audio-error" x-text="audioError"></div>
+        <button @click="project && loadAudio(project)">Erneut versuchen</button>
+      </div>
+      <div class="loading-overlay" x-show="!project && !audioLoading" x-cloak>
+        <div style="text-align:center">
+          <div>Kein Projekt geöffnet.</div>
+          <button class="primary" style="margin-top:10px" @click="menuOpen = true">Projekt wählen</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Controls-Leiste ===== -->
+  <div id="controls-bar">
+    <button class="play-btn" @click="togglePlay()" :disabled="!project || audioLoading" x-text="isPlaying ? '⏸' : '▶'"></button>
+    <span class="time" x-text="fmt(currentTime) + ' / ' + fmt(duration)"></span>
+    <span class="spacer"></span>
+    <button class="icon" @click="zoomOut()" :disabled="!project" aria-label="Verkleinern">−</button>
+    <button class="icon" @click="zoomIn()" :disabled="!project" aria-label="Vergrößern">+</button>
+    <button x-show="currentMode === 'editor'" class="primary" @click="addSegmentAtCursor()">＋ Marke</button>
+  </div>
+
+  <!-- ===== Notiz-/Segmentbereich (untere zwei Drittel) ===== -->
+  <section id="notes-section">
+    <div class="notes-head">
+      <h2>Segmente</h2>
+      <span x-show="currentMode === 'editor' && lockOwned" class="badge lock">Du bearbeitest</span>
+      <span x-show="currentMode === 'editor' && !lockOwned && !online" class="badge offline">Offline-Bearbeitung</span>
+    </div>
+
+    <template x-if="project && sortedSegments.length === 0">
+      <div class="empty">
+        Noch keine Sprungmarken.<br>
+        <template x-if="currentMode === 'editor'">
+          <span>Tippe auf „＋ Marke", um an der aktuellen Position eine zu setzen.</span>
+        </template>
+        <template x-if="currentMode === 'training'">
+          <span>Wechsle in den Editor-Modus, um Marken anzulegen.</span>
+        </template>
+      </div>
+    </template>
+
+    <template x-for="seg in sortedSegments" :key="seg.id">
+      <div class="segment" :id="'seg-' + seg.id" :class="{ active: seg.id === activeSegmentId }">
+        <div class="row">
+          <button class="ts" @click="seekTo(seg.timestamp)" x-text="fmt(seg.timestamp)"></button>
+          <input class="label-input" type="text" placeholder="Label (z.B. Hebung)"
+                 :readonly="currentMode !== 'editor'"
+                 :value="seg.label"
+                 @input="onSegmentInput(seg, 'label', $event.target.value)" />
+          <button x-show="currentMode === 'editor'" class="icon danger" @click="deleteSegment(seg)" aria-label="Löschen">🗑</button>
+        </div>
+        <textarea class="notes" placeholder="Notizen / Bewegung…" rows="2"
+                  :readonly="currentMode !== 'editor'"
+                  :value="seg.notes"
+                  @input="onSegmentInput(seg, 'notes', $event.target.value)"></textarea>
+      </div>
+    </template>
+  </section>
+
+  <!-- ===== Off-Canvas Menü (Projekte & Upload) ===== -->
+  <template x-if="menuOpen">
+    <div>
+      <div class="scrim" @click="menuOpen = false"></div>
+      <aside class="drawer">
+        <header>
+          <h2>Projekte</h2>
+          <span x-show="!online" class="badge offline">offline</span>
+          <button class="icon" @click="menuOpen = false" aria-label="Schließen">✕</button>
+        </header>
+        <div class="body">
+          <template x-for="p in projects" :key="p.id">
+            <div class="project-item" :class="{ active: project && p.id === project.id }" @click="openProject(p)">
+              <div class="pi-main">
+                <div class="pi-title" x-text="p.title"></div>
+                <div class="pi-meta" x-text="`${p.bpm} BPM · ${p.time_signature}`"></div>
+              </div>
+              <button class="icon danger" @click.stop="confirmDeleteProject(p)" aria-label="Projekt löschen">🗑</button>
+            </div>
+          </template>
+          <template x-if="projects.length === 0">
+            <div class="empty" style="padding:20px 0" x-text="online ? 'Noch keine Projekte.' : 'Offline – keine zwischengespeicherten Projekte.'"></div>
+          </template>
+
+          <div class="section-title">Neues Projekt</div>
+          <div class="field">
+            <label>Titel</label>
+            <input type="text" x-model="form.title" placeholder="z.B. Kür 2026" />
+          </div>
+          <div class="field two">
+            <div style="flex:1">
+              <label>BPM</label>
+              <input type="number" min="20" max="300" x-model.number="form.bpm" />
+            </div>
+            <div style="flex:1">
+              <label>Taktart</label>
+              <select x-model="form.time_signature">
+                <option>4/4</option>
+                <option>3/4</option>
+                <option>2/4</option>
+                <option>6/8</option>
+              </select>
+            </div>
+          </div>
+          <div class="field">
+            <label>Audio-Datei (WAV / MP3)</label>
+            <label class="filedrop">
+              <input type="file" accept="audio/*,.wav,.mp3,.m4a" style="display:none" @change="onFilePick($event)" />
+              <template x-if="!form.file"><span>Tippen, um Datei zu wählen</span></template>
+              <template x-if="form.file"><span><strong x-text="form.file.name"></strong><br><span x-text="prettySize(form.file.size)"></span></span></template>
+            </label>
+          </div>
+
+          <template x-if="uploading">
+            <div class="field">
+              <div style="font-size:13px;color:var(--muted)" x-text="`Lade hoch… ${Math.round(uploadProgress*100)}%`"></div>
+              <div class="progress"><div :style="`width:${uploadProgress*100}%`"></div></div>
+              <button style="margin-top:10px;width:100%" class="danger" @click="abortUpload()">Abbrechen</button>
+            </div>
+          </template>
+          <template x-if="uploadError">
+            <div class="field" style="color:var(--danger);font-size:13px" x-text="uploadError"></div>
+          </template>
+
+          <button class="primary" style="width:100%;margin-top:6px"
+                  :disabled="uploading || !form.title || !form.file || !online"
+                  @click="createProject()"
+                  x-text="online ? 'Projekt anlegen & hochladen' : 'Offline – Anlegen nicht möglich'"></button>
+        </div>
+      </aside>
+    </div>
+  </template>
+
+  <!-- ===== Name-Modal (einmalig) ===== -->
+  <template x-if="nameModalOpen">
+    <div>
+      <div class="scrim"></div>
+      <div class="modal">
+        <header><h2>Willkommen 🎵</h2></header>
+        <div class="body">
+          <p style="margin-top:0;color:var(--muted);font-size:14px">
+            Sag uns deinen Namen – so sehen Mitnutzer, wer ein Projekt gerade bearbeitet.
+          </p>
+          <input type="text" x-model="nameInput" placeholder="Dein Name" @keydown.enter="saveName()" />
+          <button class="primary" style="width:100%;margin-top:12px" :disabled="!nameInput.trim()" @click="saveName()">Los geht's</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ===== Status-Toast ===== -->
+  <template x-if="toast">
+    <div id="toast" x-text="toast"></div>
+  </template>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
