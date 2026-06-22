@@ -100,6 +100,15 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   position: relative;
   padding: 4px 6px 0;
 }
+/* Taktanfänge (primary) dicker & heller als Beat-Ticks; Parts kommen aus der
+   Wavesurfer-Timeline (Shadow DOM). !important schlägt die Inline-Styles. */
+#waveform ::part(timeline-notch) { color: #6b7180; }
+#waveform ::part(timeline-notch-tick) { height: 42% !important; }
+#waveform ::part(timeline-notch-primary) {
+  border-left-width: 2px !important;
+  color: #c3ccff !important;
+  font-weight: 700;
+}
 #waveform .loading-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;
