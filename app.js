@@ -311,13 +311,13 @@ Alpine.data('choreo', () => ({
   timelineOptions(project) {
     const secondsPerBeat = 60 / (project.bpm || 120);
     const beatsPerBar = parseInt((project.time_signature || '4/4').split('/')[0], 10) || 4;
-    const secondsPerBar = secondsPerBeat * beatsPerBar;
     return {
       height: 22,
       timeInterval: secondsPerBeat,             // ein Tick pro Beat
-      // WICHTIG: primaryLabelInterval wird in SEKUNDEN mit der Tick-Zeit verglichen,
-      // nicht als Anzahl. Daher secondsPerBar -> Taktanfang = "primary" (volle Höhe).
-      primaryLabelInterval: secondsPerBar,
+      // Taktanfang = jeder N-te Tick (GANZZAHL-Zählung statt Sekunden-Modulo,
+      // sonst driftet die Float-Rechnung und die dicken Linien hören auf).
+      primaryLabelSpacing: beatsPerBar,
+      primaryLabelInterval: 1e9,                // sekunden-basierte Primary-Logik aus
       secondaryLabelInterval: 1e9,              // keine sekundären Labels/Striche
       secondaryLabelOpacity: 0.4,              // Beat-Ticks etwas sichtbarer
       timeOffset: Number(this.gridOffset) || 0, // Raster nach Intro verschieben
