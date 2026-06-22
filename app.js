@@ -12,7 +12,7 @@ import TimelinePlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/pl
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 9;
+const APP_VERSION = 10;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -92,6 +92,8 @@ Alpine.data('choreo', () => ({
   duration: 0,
   activeSegmentId: null,
   zoom: 0,                          // minPxPerSec (0 = fit)
+  canScroll: false,                 // Waveform breiter als Sichtfenster?
+  scrollPos: 0,                     // horizontale Scroll-Position 0..1
   gridOffset: 0,                    // Beat-Raster-Offset in Sekunden (z.B. Intro)
   _projSaveTimer: null,
   _projPending: null,
@@ -146,6 +148,21 @@ Alpine.data('choreo', () => ({
       }
     });
     window.addEventListener('pagehide', () => { this.flushPending(); this.releaseLockBeacon(); });
+
+    // Tastatur (PC-Usability): Leertaste = Play/Pause, Pfeile = ±5s
+    window.addEventListener('keydown', (e) => {
+      if (this.isTypingTarget(e.target)) return;
+      if (e.code === 'Space') {
+        e.preventDefault();
+        this.togglePlay();
+      } else if (e.code === 'ArrowLeft' && ws) {
+        e.preventDefault();
+        ws.setTime(Math.max(0, ws.getCurrentTime() - 5));
+      } else if (e.code === 'ArrowRight' && ws) {
+        e.preventDefault();
+        ws.setTime(Math.min(this.duration, ws.getCurrentTime() + 5));
+      }
+    });
 
     // Service Worker
     if ('serviceWorker' in navigator) {
@@ -314,6 +331,9 @@ Alpine.data('choreo', () => ({
     ws.on('finish', () => { this.isPlaying = false; });
     ws.on('timeupdate', (t) => this.onTimeUpdate(t));
     ws.on('error', (err) => this.handleAudioError(err));
+    ws.on('scroll', () => this.refreshScroll());
+    ws.on('zoom', () => this.refreshScroll());
+    ws.on('ready', () => this.refreshScroll());
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
@@ -431,8 +451,32 @@ Alpine.data('choreo', () => ({
   /* ===================== Playback-Controls ===================== */
   togglePlay() { if (ws) ws.playPause(); },
   seekTo(t) { if (ws && this.duration) ws.setTime(Number(t)); },
-  zoomIn() { this.zoom = Math.min(400, (this.zoom || 20) * 1.6); if (ws) ws.zoom(this.zoom); },
-  zoomOut() { this.zoom = Math.max(1, (this.zoom || 20) / 1.6); if (ws) ws.zoom(this.zoom); },
+  zoomIn() { this.zoom = Math.min(400, (this.zoom || 20) * 1.6); if (ws) ws.zoom(this.zoom); this.refreshScroll(); },
+  zoomOut() { this.zoom = Math.max(1, (this.zoom || 20) / 1.6); if (ws) ws.zoom(this.zoom); this.refreshScroll(); },
+
+  isTypingTarget(el) {
+    if (!el) return false;
+    const t = (el.tagName || '').toUpperCase();
+    return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || el.isContentEditable;
+  },
+
+  /* Horizontale Scroll-Position aus dem Wavesurfer-Scrollcontainer ableiten */
+  scrollEl() {
+    try { const w = ws && ws.getWrapper(); return w ? w.parentElement : null; } catch (e) { return null; }
+  },
+  refreshScroll() {
+    const el = this.scrollEl();
+    if (!el) { this.canScroll = false; return; }
+    const maxPx = Math.max(0, el.scrollWidth - el.clientWidth);
+    this.canScroll = maxPx > 2;
+    this.scrollPos = maxPx > 0 ? Math.min(1, Math.max(0, el.scrollLeft / maxPx)) : 0;
+  },
+  onScrollSlider(v) {
+    const el = this.scrollEl();
+    if (!el || !ws) return;
+    const maxPx = Math.max(0, el.scrollWidth - el.clientWidth);
+    ws.setScroll(Number(v) * maxPx);
+  },
 
   onTimeUpdate(t) {
     this.currentTime = t;

@@ -51,11 +51,20 @@
         </div>
       </div>
     </div>
+
+    <!-- Horizontale Scrollleiste (sichtbar wenn reingezoomt) -->
+    <div id="track-scroll" x-show="canScroll" x-cloak>
+      <input type="range" min="0" max="1" step="0.001" :value="scrollPos"
+             @input="onScrollSlider($event.target.value)" aria-label="Track scrollen" />
+    </div>
   </section>
 
   <!-- ===== Controls-Leiste ===== -->
   <div id="controls-bar">
-    <button class="play-btn" @click="togglePlay()" :disabled="!project || audioLoading" x-text="isPlaying ? '⏸' : '▶'"></button>
+    <button class="play-btn" @click="togglePlay()" :disabled="!project || audioLoading" aria-label="Play/Pause">
+      <svg x-show="!isPlaying" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+      <svg x-show="isPlaying" x-cloak width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>
+    </button>
     <span class="time" x-text="fmt(currentTime) + ' / ' + fmt(duration)"></span>
     <span class="spacer"></span>
     <button class="icon" @click="zoomOut()" :disabled="!project" aria-label="Verkleinern">−</button>
@@ -231,7 +240,7 @@
           </div>
 
           <div class="calib-row" style="margin-top:18px">
-            <button @click="togglePlay()" x-text="isPlaying ? '⏸ Pause' : '▶ Abspielen'"></button>
+            <button @click="togglePlay()" x-text="isPlaying ? 'Pause' : 'Abspielen'"></button>
             <button class="primary" style="flex:1" @click="closeSettings()">Fertig</button>
           </div>
           <p class="hint" x-show="!online">Offline – Änderungen werden synchronisiert, sobald wieder Netz da ist.</p>
