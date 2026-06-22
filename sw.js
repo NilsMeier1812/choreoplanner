@@ -1,12 +1,15 @@
 /* ============================================================================
    Choreo-Planer – Service Worker
-   - App-Shell wird precached (Cache-First) -> UI öffnet auch offline.
-   - CDN-Module (jsDelivr: Wavesurfer, Alpine, Supabase, Dexie) -> Stale-While-Revalidate.
+   WICHTIG: App-Shell läuft NETWORK-FIRST, damit neue Deploys sofort ankommen
+   (online immer frisch, offline aus Cache). Cache-Name ist versioniert -> bei
+   Version-Bump werden alte Caches gelöscht.
+   - CDN-Module (jsDelivr) -> Stale-While-Revalidate.
    - Supabase REST/Storage -> Netz (kein SW-Cache; Audio liegt in IndexedDB/Dexie).
    ========================================================================== */
 
-const SHELL_CACHE = 'choreo-shell-v1';
-const CDN_CACHE = 'choreo-cdn-v1';
+const VERSION = 'v8';
+const SHELL_CACHE = `choreo-shell-${VERSION}`;
+const CDN_CACHE = `choreo-cdn-${VERSION}`;
 
 const SHELL_ASSETS = [
   './',
@@ -24,7 +27,7 @@ self.addEventListener('install', (event) => {
     caches.open(SHELL_CACHE)
       .then((c) => c.addAll(SHELL_ASSETS))
       .then(() => self.skipWaiting())
-      .catch(() => {})
+      .catch(() => self.skipWaiting())
   );
 });
 
@@ -47,32 +50,29 @@ self.addEventListener('fetch', (event) => {
   // Supabase (REST / Auth / Storage) immer übers Netz – nie cachen.
   if (url.hostname.endsWith('.supabase.co')) return;
 
-  // CDN-Module: Stale-While-Revalidate
+  // CDN-Module: Stale-While-Revalidate (Versionspinning in der URL)
   if (url.hostname === 'cdn.jsdelivr.net') {
     event.respondWith(staleWhileRevalidate(req));
     return;
   }
 
-  // Same-Origin (App-Shell): Cache-First mit Netz-Fallback
+  // Same-Origin (App-Shell): NETWORK-FIRST mit Cache-Fallback
   if (url.origin === self.location.origin) {
-    event.respondWith(cacheFirst(req));
+    event.respondWith(networkFirst(req));
     return;
   }
   // sonst: Standardverhalten (Netz)
 });
 
-async function cacheFirst(req) {
+async function networkFirst(req) {
   const cache = await caches.open(SHELL_CACHE);
-  const cached = await cache.match(req, { ignoreSearch: true });
-  if (cached) return cached;
   try {
     const res = await fetch(req);
-    if (res && res.ok && new URL(req.url).origin === self.location.origin) {
-      cache.put(req, res.clone());
-    }
+    if (res && res.ok) cache.put(req, res.clone());
     return res;
   } catch (e) {
-    // Navigationsanfragen offline -> App-Shell ausliefern
+    const cached = await cache.match(req, { ignoreSearch: true });
+    if (cached) return cached;
     if (req.mode === 'navigate') {
       const shell = await cache.match('./index.html');
       if (shell) return shell;

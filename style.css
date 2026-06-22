@@ -232,6 +232,13 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 }
 .drawer header h2, .modal header h2 { font-size: 16px; margin: 0; flex: 1; }
 .drawer .body { flex: 1; overflow-y: auto; padding: 14px; }
+.drawer-foot {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 10px;
+  color: #666;
+  border-top: 1px solid var(--border);
+}
 
 .project-item {
   display: flex; align-items: center; gap: 10px;
