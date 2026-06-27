@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 13;
+const APP_VERSION = 14;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -64,6 +64,8 @@ const debounceTimers = {};         // segId -> timeout
 const pendingEdits = {};           // segId -> { feld: wert } (für visibilitychange-Flush)
 const tempoSaveTimers = {};        // tempoId -> timeout (debounced Speichern)
 const tempoPending = {};           // tempoId -> { feld: wert }
+const genTimers = {};              // "table:id" -> timeout (generisches debounced Update)
+const genPending = {};             // "table:id" -> { feld: wert }
 let lastActiveSegmentId = null;
 let loadToken = 0;                 // verhindert Race bei schnellem Projektwechsel
 let audioSource = null;           // 'cache' | 'network' – woher der aktuelle Blob stammt
@@ -115,6 +117,11 @@ Alpine.data('choreo', () => ({
   project: null,
   segments: [],
   tempoSections: [],                // Tempo-/Takt-Abschnitte des offenen Projekts
+  persons: [],                      // Personen (1..N)
+  parts: [],                        // Gruppen-Abschnitte (Zeitbereiche)
+  memberships: [],                  // Gruppen-Zuteilungen (part_id, person_number, group_number)
+  myPersonNumber: 0,                // "Ich bin Person X" (0 = niemand)
+  bottomTab: 'notes',               // 'notes' | 'groups' | 'steps'
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -163,6 +170,28 @@ Alpine.data('choreo', () => ({
     if (!sec) return 0;
     const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
     return (60 / (Number(sec.bpm) || 120)) * bpb;
+  },
+  get sortedPersons() { return [...this.persons].sort((a, b) => Number(a.number) - Number(b.number)); },
+  get sortedParts() { return [...this.parts].sort((a, b) => Number(a.start_sec) - Number(b.start_sec)); },
+  // Gruppen-Abschnitt an der aktuellen Abspielposition
+  get activePart() {
+    const t = this.currentTime;
+    for (const p of this.sortedParts) {
+      const e = p.end_sec == null ? Infinity : Number(p.end_sec);
+      if (t >= Number(p.start_sec) - 1e-6 && t < e) return p;
+    }
+    return null;
+  },
+  // Gruppe einer Person in einem Abschnitt (0 = keine/„alle gleich")
+  groupOf(part, personNumber) {
+    if (!part) return 0;
+    const m = this.memberships.find(x => x.part_id === part.id && Number(x.person_number) === Number(personNumber));
+    return m ? Number(m.group_number) : 0;
+  },
+  // Gruppe der ausgewählten Person an der aktuellen Position
+  get myGroup() {
+    if (!this.myPersonNumber) return 0;
+    return this.groupOf(this.activePart, this.myPersonNumber);
   },
 
   /* ===================== Init ===================== */
@@ -307,6 +336,9 @@ Alpine.data('choreo', () => ({
     this.destroyWs();
     await this.loadSegments(p.id);
     await this.loadTempoSections(p.id);
+    await this.loadPersons(p.id);
+    await this.loadParts(p.id);
+    this.myPersonNumber = Number(localStorage.getItem('choreo_person_' + p.id)) || 0;
     if (token !== loadToken) return;      // anderes Projekt wurde inzwischen gewählt
     this.createWs(p);
     await this.loadAudio(p);
@@ -524,20 +556,27 @@ Alpine.data('choreo', () => ({
       const from = Math.max(secStart, startT);
       const to = Math.min(secEnd, endT);
       if (to <= from) continue;
+      // Pixel-Abstände: zu weit rausgezoomt -> Raster ausblenden statt zukleistern
+      const beatPx = spb * pxPerSec;
+      const barPx = beatPx * bpb;
+      if (barPx < 12) continue;            // ganzer Abschnitt zu dicht -> nichts zeichnen
+      const showBeats = beatPx >= 8;       // dünne Beat-Linien erst ab genug Abstand
+      const showNums = barPx >= 22;        // Taktnummern erst, wenn lesbar
       let k = Math.ceil((from - off) / spb - 1e-6);   // erster sichtbarer Beat-Index
       for (; ; k++) {
         const t = off + k * spb;
         if (t > to + 1e-6) break;
         if (t < secStart - 1e-6) continue;
-        const x = Math.round((t - startT) * pxPerSec) + 0.5;
         const isBar = (((k % bpb) + bpb) % bpb) === 0;
+        if (!isBar && !showBeats) continue;
+        const x = Math.round((t - startT) * pxPerSec) + 0.5;
         gridCtx.beginPath();
         gridCtx.strokeStyle = isBar ? 'rgba(195,204,255,0.85)' : 'rgba(150,160,180,0.30)';
         gridCtx.lineWidth = isBar ? 2 : 1;
         gridCtx.moveTo(x, isBar ? 0 : h * 0.5);
         gridCtx.lineTo(x, h);
         gridCtx.stroke();
-        if (isBar) {
+        if (isBar && showNums) {
           gridCtx.fillStyle = 'rgba(195,204,255,0.9)';
           gridCtx.fillText(String(Math.floor(k / bpb) + 1), x + 3, 2);
         }
@@ -651,6 +690,160 @@ Alpine.data('choreo', () => ({
   },
   boundToCursor(sec, field) {
     this.patchTempo(sec, { [field]: ws ? Math.round(ws.getCurrentTime() * 1000) / 1000 : 0 });
+  },
+
+  /* ===================== Generische Persistenz-Helfer ===================== */
+  async persistGeneric(table, op, row) {
+    try {
+      if (op === 'insert') { const { error } = await sb.from(table).insert(row); if (error) throw error; }
+      else if (op === 'delete') { const { error } = await sb.from(table).delete().eq('id', row.id); if (error) throw error; }
+    } catch (e) {
+      await this.queue(table, op, row.id, op === 'delete' ? null : row);
+      this.setStatus('Offline – gespeichert, wird synchronisiert');
+    }
+  },
+  debouncedUpdate(table, id, patch) {
+    const k = table + ':' + id;
+    genPending[k] = Object.assign(genPending[k] || {}, patch);
+    clearTimeout(genTimers[k]);
+    genTimers[k] = setTimeout(async () => {
+      const payload = genPending[k]; delete genPending[k];
+      if (!payload) return;
+      try { const { error } = await sb.from(table).update(payload).eq('id', id); if (error) throw error; }
+      catch (e) { this.queue(table, 'update', id, payload); this.setStatus('Offline – gespeichert, wird synchronisiert'); }
+    }, 500);
+  },
+
+  /* ===================== Personen ===================== */
+  async loadPersons(pid) {
+    try {
+      const { data, error } = await sb.from('persons').select('*').eq('project_id', pid).order('number');
+      if (error) throw error;
+      this.persons = data || [];
+      await db.persons.where('project_id').equals(pid).delete().catch(() => {});
+      await db.persons.bulkPut(this.persons).catch(() => {});
+    } catch (e) {
+      this.persons = await db.persons.where('project_id').equals(pid).toArray().catch(() => []);
+    }
+  },
+  addPerson() {
+    if (!this.project) return;
+    const nextNum = this.persons.reduce((m, p) => Math.max(m, Number(p.number)), 0) + 1;
+    const row = { id: uuid(), project_id: this.project.id, number: nextNum, name: '' };
+    this.persons.push(row);
+    db.persons.put(row).catch(() => {});
+    this.persistGeneric('persons', 'insert', row);
+  },
+  renamePerson(p, name) {
+    p.name = name;
+    db.persons.put(JSON.parse(JSON.stringify(p))).catch(() => {});
+    this.debouncedUpdate('persons', p.id, { name });
+  },
+  removePerson(p) {
+    if (!confirm(`Person ${p.number}${p.name ? ' (' + p.name + ')' : ''} löschen?`)) return;
+    this.persons = this.persons.filter(x => x.id !== p.id);
+    this.memberships = this.memberships.filter(m => Number(m.person_number) !== Number(p.number));
+    db.persons.delete(p.id).catch(() => {});
+    this.persistGeneric('persons', 'delete', p);
+    if (Number(this.myPersonNumber) === Number(p.number)) this.setMyPerson(0);
+  },
+  setMyPerson(n) {
+    this.myPersonNumber = Number(n) || 0;
+    if (this.project) localStorage.setItem('choreo_person_' + this.project.id, this.myPersonNumber);
+  },
+
+  /* ===================== Gruppen-Abschnitte (parts) ===================== */
+  async loadParts(pid) {
+    try {
+      const { data, error } = await sb.from('parts').select('*').eq('project_id', pid).order('start_sec');
+      if (error) throw error;
+      this.parts = data || [];
+      await db.parts.where('project_id').equals(pid).delete().catch(() => {});
+      await db.parts.bulkPut(this.parts).catch(() => {});
+    } catch (e) {
+      this.parts = await db.parts.where('project_id').equals(pid).toArray().catch(() => []);
+    }
+    await this.loadMemberships();
+  },
+  async loadMemberships() {
+    const ids = this.parts.map(p => p.id);
+    if (!ids.length) { this.memberships = []; return; }
+    try {
+      const { data, error } = await sb.from('group_memberships').select('*').in('part_id', ids);
+      if (error) throw error;
+      this.memberships = data || [];
+      for (const id of ids) await db.memberships.where('part_id').equals(id).delete().catch(() => {});
+      await db.memberships.bulkPut(this.memberships).catch(() => {});
+    } catch (e) {
+      const out = [];
+      for (const id of ids) { const m = await db.memberships.where('part_id').equals(id).toArray().catch(() => []); out.push(...m); }
+      this.memberships = out;
+    }
+  },
+  addPart() {
+    if (!this.project) return;
+    const list = this.sortedParts;
+    const last = list[list.length - 1];
+    let start = 0;
+    if (last) start = last.end_sec == null ? Math.min(this.duration || 0, (Number(last.start_sec) || 0) + 1) : Number(last.end_sec);
+    if (last && last.end_sec == null) this.patchPart(last, { end_sec: Math.round(start * 1000) / 1000 });
+    const row = {
+      id: uuid(), project_id: this.project.id, sort_index: this.parts.length,
+      label: 'Abschnitt ' + (this.parts.length + 1),
+      start_sec: Math.round(start * 1000) / 1000, end_sec: null
+    };
+    this.parts.push(row);
+    db.parts.put(row).catch(() => {});
+    this.persistGeneric('parts', 'insert', row);
+  },
+  patchPart(part, patch) {
+    Object.assign(part, patch);
+    db.parts.put(JSON.parse(JSON.stringify(part))).catch(() => {});
+    this.debouncedUpdate('parts', part.id, patch);
+  },
+  setPartBound(part, field, value) {
+    if (field === 'end_sec' && (value === '' || value == null)) { this.patchPart(part, { end_sec: null }); return; }
+    let n = parseFloat(value); if (isNaN(n)) return;
+    n = Math.max(0, Math.round(n * 1000) / 1000);
+    this.patchPart(part, { [field]: n });
+  },
+  partBoundToCursor(part, field) {
+    this.patchPart(part, { [field]: ws ? Math.round(ws.getCurrentTime() * 1000) / 1000 : 0 });
+  },
+  removePart(part) {
+    if (!confirm(`„${part.label || 'Abschnitt'}" löschen?`)) return;
+    this.parts = this.parts.filter(x => x.id !== part.id);
+    this.memberships = this.memberships.filter(m => m.part_id !== part.id);  // DB: ON DELETE CASCADE
+    db.parts.delete(part.id).catch(() => {});
+    this.persistGeneric('parts', 'delete', part);
+  },
+
+  /* ===================== Gruppen-Zuteilung ===================== */
+  GROUP_MAX: 8,
+  cycleGroup(part, personNumber) {
+    const cur = this.groupOf(part, personNumber);
+    this.setMembership(part, personNumber, (cur + 1) % (this.GROUP_MAX + 1));
+  },
+  setMembership(part, personNumber, groupNumber) {
+    const m = this.memberships.find(x => x.part_id === part.id && Number(x.person_number) === Number(personNumber));
+    if (groupNumber === 0) {
+      if (m) {
+        this.memberships = this.memberships.filter(x => x.id !== m.id);
+        db.memberships.delete(m.id).catch(() => {});
+        this.persistGeneric('group_memberships', 'delete', m);
+      }
+      return;
+    }
+    if (m) {
+      m.group_number = groupNumber;
+      db.memberships.put(JSON.parse(JSON.stringify(m))).catch(() => {});
+      this.debouncedUpdate('group_memberships', m.id, { group_number: groupNumber });
+    } else {
+      const row = { id: uuid(), part_id: part.id, person_number: Number(personNumber), group_number: groupNumber };
+      this.memberships.push(row);
+      db.memberships.put(row).catch(() => {});
+      this.persistGeneric('group_memberships', 'insert', row);
+    }
   },
 
   /* ===================== Projekt-Einstellungen / Kalibrierung ===================== */

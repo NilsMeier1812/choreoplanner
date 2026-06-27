@@ -170,14 +170,58 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 #grid-bar .spacer { flex: 1; }
 #grid-bar button:not(.icon) { padding: 6px 10px; font-size: 13px; }
 
-/* ===== Notiz-/Segmentbereich (untere zwei Drittel) ===== */
-#notes-section {
+/* ===== Unterer Bereich: Tabs (untere zwei Drittel) ===== */
+#bottom-section {
   flex-grow: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.tabbar {
+  flex-shrink: 0;
+  display: flex;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.tabbar button {
+  flex: 1; border: none; border-radius: 0; background: transparent;
+  padding: 10px; font-size: 13px; color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+.tabbar button.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tab-content {
+  flex-grow: 1;
+  min-height: 0;
   overflow-y: auto;        /* nur DIESER Bereich darf scrollen */
-  padding: 12px;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
 }
+.tab-pane { padding: 12px; }
+
+/* Personen-Zeile */
+.person-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.person-row input { flex: 1; }
+.person-num { min-width: 26px; text-align: center; font-weight: 600; color: var(--accent); }
+
+/* Gruppen-Chips */
+.chip-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.grp-chip {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  min-width: 44px; padding: 6px 4px; line-height: 1;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); font-size: 13px; font-weight: 600;
+}
+.grp-chip .grp-tag { font-size: 10px; color: var(--muted); font-weight: 400; }
+.grp-chip:not(.g0) .grp-tag { color: var(--text); }
+.grp-chip.g0 { opacity: .7; }
+.grp-chip.g1 { border-color: #6c8cff; background: rgba(108,140,255,.16); }
+.grp-chip.g2 { border-color: #3ecf8e; background: rgba(62,207,142,.16); }
+.grp-chip.g3 { border-color: #ffcf6a; background: rgba(255,207,106,.16); }
+.grp-chip.g4 { border-color: #ff7ab6; background: rgba(255,122,182,.16); }
+.grp-chip.g5 { border-color: #b88cff; background: rgba(184,140,255,.16); }
+.grp-chip.g6 { border-color: #5ad1e6; background: rgba(90,209,230,.16); }
+.grp-chip.g7 { border-color: #ff9a5a; background: rgba(255,154,90,.16); }
+.grp-chip.g8 { border-color: #9aa0b0; background: rgba(154,160,176,.16); }
 .notes-head { display: flex; align-items: center; gap: 8px; margin: 2px 4px 10px; }
 .notes-head h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0; flex: 1; }
 .empty { color: var(--muted); text-align: center; padding: 40px 16px; font-size: 14px; }

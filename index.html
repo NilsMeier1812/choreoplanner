@@ -66,42 +66,131 @@
     <button x-show="currentMode === 'editor'" class="primary" @click="addSegmentAtCursor()">＋ Marke</button>
   </div>
 
-  <!-- ===== Notiz-/Segmentbereich (untere zwei Drittel) ===== -->
-  <section id="notes-section">
-    <div class="notes-head">
-      <h2>Segmente</h2>
-      <span x-show="currentMode === 'editor' && lockOwned" class="badge lock">Du bearbeitest</span>
-      <span x-show="currentMode === 'editor' && !lockOwned && !online" class="badge offline">Offline-Bearbeitung</span>
+  <!-- ===== Unterer Bereich: Tabs ===== -->
+  <section id="bottom-section">
+    <div class="tabbar">
+      <button :class="{ active: bottomTab === 'notes' }" @click="bottomTab = 'notes'">Notizen</button>
+      <button :class="{ active: bottomTab === 'groups' }" @click="bottomTab = 'groups'">Gruppen</button>
     </div>
 
-    <template x-if="project && sortedSegments.length === 0">
-      <div class="empty">
-        Noch keine Sprungmarken.<br>
-        <template x-if="currentMode === 'editor'">
-          <span>Tippe auf „＋ Marke", um an der aktuellen Position eine zu setzen.</span>
-        </template>
-        <template x-if="currentMode === 'training'">
-          <span>Wechsle in den Editor-Modus, um Marken anzulegen.</span>
-        </template>
-      </div>
-    </template>
+    <div class="tab-content">
 
-    <template x-for="seg in sortedSegments" :key="seg.id">
-      <div class="segment" :id="'seg-' + seg.id" :class="{ active: seg.id === activeSegmentId }">
-        <div class="row">
-          <button class="ts" @click="seekTo(seg.timestamp)" x-text="fmt(seg.timestamp)"></button>
-          <input class="label-input" type="text" placeholder="Label (z.B. Hebung)"
-                 :readonly="currentMode !== 'editor'"
-                 :value="seg.label"
-                 @input="onSegmentInput(seg, 'label', $event.target.value)" />
-          <button x-show="currentMode === 'editor'" class="icon danger" @click="deleteSegment(seg)" aria-label="Löschen">🗑</button>
+      <!-- Tab: Notizen / Segmente -->
+      <div x-show="bottomTab === 'notes'" class="tab-pane">
+        <div class="notes-head">
+          <h2>Segmente</h2>
+          <span x-show="currentMode === 'editor' && lockOwned" class="badge lock">Du bearbeitest</span>
+          <span x-show="currentMode === 'editor' && !lockOwned && !online" class="badge offline">Offline-Bearbeitung</span>
         </div>
-        <textarea class="notes" placeholder="Notizen / Bewegung…" rows="2"
-                  :readonly="currentMode !== 'editor'"
-                  :value="seg.notes"
-                  @input="onSegmentInput(seg, 'notes', $event.target.value)"></textarea>
+
+        <template x-if="project && sortedSegments.length === 0">
+          <div class="empty">
+            Noch keine Sprungmarken.<br>
+            <template x-if="currentMode === 'editor'">
+              <span>Tippe auf „＋ Marke", um an der aktuellen Position eine zu setzen.</span>
+            </template>
+            <template x-if="currentMode === 'training'">
+              <span>Wechsle in den Editor-Modus, um Marken anzulegen.</span>
+            </template>
+          </div>
+        </template>
+
+        <template x-for="seg in sortedSegments" :key="seg.id">
+          <div class="segment" :id="'seg-' + seg.id" :class="{ active: seg.id === activeSegmentId }">
+            <div class="row">
+              <button class="ts" @click="seekTo(seg.timestamp)" x-text="fmt(seg.timestamp)"></button>
+              <input class="label-input" type="text" placeholder="Label (z.B. Hebung)"
+                     :readonly="currentMode !== 'editor'"
+                     :value="seg.label"
+                     @input="onSegmentInput(seg, 'label', $event.target.value)" />
+              <button x-show="currentMode === 'editor'" class="icon danger" @click="deleteSegment(seg)" aria-label="Löschen">🗑</button>
+            </div>
+            <textarea class="notes" placeholder="Notizen / Bewegung…" rows="2"
+                      :readonly="currentMode !== 'editor'"
+                      :value="seg.notes"
+                      @input="onSegmentInput(seg, 'notes', $event.target.value)"></textarea>
+          </div>
+        </template>
       </div>
-    </template>
+
+      <!-- Tab: Gruppen -->
+      <div x-show="bottomTab === 'groups'" class="tab-pane">
+        <div class="field" style="margin-bottom:14px">
+          <label>Ich bin Person</label>
+          <select :value="myPersonNumber" @change="setMyPerson($event.target.value)">
+            <option value="0">— niemand —</option>
+            <template x-for="p in sortedPersons" :key="p.id">
+              <option :value="p.number" x-text="'Person ' + p.number + (p.name ? ' (' + p.name + ')' : '')"></option>
+            </template>
+          </select>
+          <template x-if="myPersonNumber && activePart">
+            <p class="hint" style="margin-top:6px">
+              Aktuell (<span x-text="activePart.label"></span>):
+              <strong x-text="myGroup ? 'Gruppe ' + myGroup : 'keine Gruppe / alle gleich'"></strong>
+            </p>
+          </template>
+          <template x-if="myPersonNumber && !activePart">
+            <p class="hint" style="margin-top:6px">An dieser Stelle ist kein Gruppen-Abschnitt definiert.</p>
+          </template>
+        </div>
+
+        <template x-if="!isEditor">
+          <p class="empty">Zum Bearbeiten von Personen &amp; Gruppen als Editor anmelden.</p>
+        </template>
+
+        <template x-if="isEditor">
+          <div>
+            <div class="section-title">Personen</div>
+            <template x-for="p in sortedPersons" :key="p.id">
+              <div class="person-row">
+                <span class="person-num" x-text="p.number"></span>
+                <input type="text" :value="p.name || ''" placeholder="Name (optional)" @input="renamePerson(p, $event.target.value)" />
+                <button class="icon danger" @click="removePerson(p)" aria-label="Person löschen">🗑</button>
+              </div>
+            </template>
+            <template x-if="!sortedPersons.length"><p class="hint">Noch keine Personen.</p></template>
+            <button class="primary" style="width:100%;margin:4px 0 18px" @click="addPerson()">＋ Person</button>
+
+            <div class="section-title">Abschnitte &amp; Gruppen</div>
+            <p class="hint">Pro Abschnitt jeder Person eine Gruppe geben (Tippen schaltet weiter: – ▸ 1 ▸ 2 …). „–" = keine Gruppe / alle gleich.</p>
+            <template x-for="part in sortedParts" :key="part.id">
+              <div class="tempo-card">
+                <div class="tc-head">
+                  <input class="tc-label" type="text" :value="part.label || ''" placeholder="Abschnitt-Name" @input="patchPart(part, { label: $event.target.value })" />
+                  <button class="icon danger" @click="removePart(part)" aria-label="Abschnitt löschen">🗑</button>
+                </div>
+                <div class="field two" style="margin-bottom:8px">
+                  <div style="flex:1"><label>Start (s)</label>
+                    <div class="calib-row" style="margin:0;gap:6px">
+                      <input type="number" step="0.001" min="0" :value="part.start_sec" @change="setPartBound(part,'start_sec',$event.target.value)" />
+                      <button class="icon" @click="partBoundToCursor(part,'start_sec')" title="auf Abspielposition">🎯</button>
+                    </div>
+                  </div>
+                  <div style="flex:1"><label>Ende (s)</label>
+                    <div class="calib-row" style="margin:0;gap:6px">
+                      <input type="number" step="0.001" min="0" :value="part.end_sec ?? ''" placeholder="Schluss" @change="setPartBound(part,'end_sec',$event.target.value)" />
+                      <button class="icon" @click="partBoundToCursor(part,'end_sec')" title="auf Abspielposition">🎯</button>
+                    </div>
+                  </div>
+                </div>
+                <label class="mini-label">Gruppen-Zuteilung</label>
+                <div class="chip-grid">
+                  <template x-for="p in sortedPersons" :key="p.id">
+                    <button class="grp-chip" :class="'g' + groupOf(part, p.number)" @click="cycleGroup(part, p.number)">
+                      <span x-text="p.number"></span>
+                      <span class="grp-tag" x-text="groupOf(part, p.number) ? ('G' + groupOf(part, p.number)) : '–'"></span>
+                    </button>
+                  </template>
+                </div>
+                <template x-if="!sortedPersons.length"><p class="hint">Erst Personen anlegen.</p></template>
+              </div>
+            </template>
+            <button class="primary" style="width:100%;margin-top:4px" @click="addPart()">＋ Abschnitt</button>
+          </div>
+        </template>
+      </div>
+
+    </div>
   </section>
 
   <!-- ===== Off-Canvas Menü (Projekte & Upload) ===== -->
