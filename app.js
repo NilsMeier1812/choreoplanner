@@ -8,11 +8,10 @@ import Alpine from 'https://cdn.jsdelivr.net/npm/alpinejs@3/dist/module.esm.js';
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import Dexie from 'https://cdn.jsdelivr.net/npm/dexie@4/+esm';
 import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.esm.js';
-import TimelinePlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/timeline.esm.js';
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 12;
+const APP_VERSION = 13;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -34,21 +33,37 @@ const STORAGE_BUCKET = 'audio-tracks';
 /* ---------- Dexie (Offline-Cache + Sync-Queue) ---------- */
 const db = new Dexie('ChoreoAppDB');
 db.version(1).stores({
-  audioCache: 'projectId',           // { projectId, blob, cachedAt }
-  syncQueue: '++id, table, timestamp',// { id, table, op, key, payload, timestamp }
-  projects: 'id',                    // gespiegelte Projekt-Metadaten (Offline-Start)
-  segments: 'id, project_id'         // gespiegelte Segmente (Offline-Start)
+  audioCache: 'projectId',
+  syncQueue: '++id, table, timestamp',
+  projects: 'id',
+  segments: 'id, project_id'
+});
+// v2: Offline-Spiegel für die neuen Tabellen (Tempo/Personen/Abschnitte/Schritte)
+db.version(2).stores({
+  audioCache: 'projectId',
+  syncQueue: '++id, table, timestamp',
+  projects: 'id',
+  segments: 'id, project_id',
+  tempoSections: 'id, project_id',
+  persons: 'id, project_id',
+  parts: 'id, project_id',
+  memberships: 'id, part_id',
+  steps: 'id, project_id'
 });
 
 /* ---------- Modul-Zustand (nicht in Alpine-Reaktivität, um WS-Proxy-Probleme zu vermeiden) ---------- */
 let ws = null;
 let wsRegions = null;
-let wsTimeline = null;
+let gridCanvas = null;             // eigenes Beat-Grid (Overlay über dem Waveform)
+let gridCtx = null;
+let gridRaf = 0;                   // requestAnimationFrame-Drossel fürs Neuzeichnen
 let app = null;                    // Referenz auf die Alpine-Komponente
 let heartbeatTimer = null;
 let currentObjectUrl = null;
 const debounceTimers = {};         // segId -> timeout
 const pendingEdits = {};           // segId -> { feld: wert } (für visibilitychange-Flush)
+const tempoSaveTimers = {};        // tempoId -> timeout (debounced Speichern)
+const tempoPending = {};           // tempoId -> { feld: wert }
 let lastActiveSegmentId = null;
 let loadToken = 0;                 // verhindert Race bei schnellem Projektwechsel
 let audioSource = null;           // 'cache' | 'network' – woher der aktuelle Blob stammt
@@ -99,6 +114,7 @@ Alpine.data('choreo', () => ({
   projects: [],
   project: null,
   segments: [],
+  tempoSections: [],                // Tempo-/Takt-Abschnitte des offenen Projekts
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -107,7 +123,6 @@ Alpine.data('choreo', () => ({
   duration: 0,
   activeSegmentId: null,
   zoom: 0,                          // minPxPerSec (0 = fit)
-  gridOffset: 0,                    // Beat-Raster-Offset in Sekunden (z.B. Intro)
   _projSaveTimer: null,
   _projPending: null,
 
@@ -130,10 +145,24 @@ Alpine.data('choreo', () => ({
   get sortedSegments() {
     return [...this.segments].sort((a, b) => Number(a.timestamp) - Number(b.timestamp));
   },
-  get barLength() {
-    if (!this.project) return 0;
-    const bpb = parseInt((this.project.time_signature || '4/4').split('/')[0], 10) || 4;
-    return (60 / (Number(this.project.bpm) || 120)) * bpb;
+  get sortedTempo() {
+    return [...this.tempoSections].sort((a, b) => Number(a.start_sec) - Number(b.start_sec));
+  },
+  // Abschnitt, der die aktuelle Abspielposition enthält (für Topbar/Anzeige)
+  get activeTempo() {
+    const t = this.currentTime;
+    const list = this.sortedTempo;
+    for (const s of list) {
+      const e = s.end_sec == null ? Infinity : Number(s.end_sec);
+      if (t >= Number(s.start_sec) - 1e-6 && t < e) return s;
+    }
+    return list[0] || null;
+  },
+  // Takt-Länge (Abstand dicker Linien) eines Abschnitts in Sekunden
+  barLengthOf(sec) {
+    if (!sec) return 0;
+    const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
+    return (60 / (Number(sec.bpm) || 120)) * bpb;
   },
 
   /* ===================== Init ===================== */
@@ -267,7 +296,6 @@ Alpine.data('choreo', () => ({
     this.currentMode = 'training';
     this.menuOpen = false;
     this.project = p;
-    this.gridOffset = Number(p.grid_offset) || 0;
     localStorage.setItem('choreo_last_project', p.id);
     this.activeSegmentId = null;
     lastActiveSegmentId = null;
@@ -278,9 +306,33 @@ Alpine.data('choreo', () => ({
     const token = ++loadToken;
     this.destroyWs();
     await this.loadSegments(p.id);
+    await this.loadTempoSections(p.id);
     if (token !== loadToken) return;      // anderes Projekt wurde inzwischen gewählt
     this.createWs(p);
     await this.loadAudio(p);
+  },
+
+  /* ===================== Tempo-Abschnitte laden ===================== */
+  async loadTempoSections(pid) {
+    try {
+      const { data, error } = await sb.from('tempo_sections').select('*').eq('project_id', pid).order('start_sec');
+      if (error) throw error;
+      this.tempoSections = data || [];
+      await db.tempoSections.where('project_id').equals(pid).delete().catch(() => {});
+      await db.tempoSections.bulkPut(this.tempoSections).catch(() => {});
+    } catch (e) {
+      this.tempoSections = await db.tempoSections.where('project_id').equals(pid).toArray().catch(() => []);
+    }
+    // Fallback: ältere Projekte ohne Abschnitt -> aus Legacy-Spalten ableiten (nur lokal)
+    if (!this.tempoSections.length && this.project) {
+      this.tempoSections = [{
+        id: uuid(), project_id: pid, sort_index: 0, label: null,
+        start_sec: 0, end_sec: null,
+        bpm: Number(this.project.bpm) || 120,
+        time_signature: this.project.time_signature || '4/4',
+        offset_sec: Number(this.project.grid_offset) || 0
+      }];
+    }
   },
 
   /* ===================== Audio (Hybrid-Cache) =====================
@@ -338,6 +390,8 @@ Alpine.data('choreo', () => ({
     this.audioError = null;
     if (ws) this.duration = ws.getDuration();
     this.renderRegions();
+    this.resizeGridCanvas();
+    this.scheduleGridDraw();
   },
 
   handleAudioError(err) {
@@ -364,9 +418,8 @@ Alpine.data('choreo', () => ({
   /* ===================== Wavesurfer ===================== */
   createWs(project) {
     const container = document.getElementById('waveform');
-    const h = Math.max(60, container.clientHeight - 24);
+    const h = Math.max(60, container.clientHeight - 6);
 
-    const timeline = TimelinePlugin.create(this.timelineOptions(project));
     ws = WaveSurfer.create({
       container,
       height: h,
@@ -378,11 +431,12 @@ Alpine.data('choreo', () => ({
       barGap: 1,
       barRadius: 2,
       minPxPerSec: this.zoom || 1,
-      fillParent: true,
-      plugins: [timeline]
+      fillParent: true
     });
-    wsTimeline = timeline;
     wsRegions = ws.registerPlugin(RegionsPlugin.create());
+
+    // eigenes Beat-Grid als Overlay-Canvas (Multi-Tempo)
+    this.setupGridCanvas(container);
 
     // 'ready'/'decode' sind die verlässlichen Signale (das load()-Promise kann hängen)
     ws.on('ready', () => this.onAudioReady());
@@ -392,56 +446,211 @@ Alpine.data('choreo', () => ({
     ws.on('finish', () => { this.isPlaying = false; });
     ws.on('timeupdate', (t) => this.onTimeUpdate(t));
     ws.on('error', (err) => this.handleAudioError(err));
+    // Grid an Scroll/Zoom/Redraw von Wavesurfer koppeln
+    ws.on('scroll', () => this.scheduleGridDraw());
+    ws.on('zoom', () => this.scheduleGridDraw());
+    ws.on('redraw', () => this.scheduleGridDraw());
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
   },
 
-  timelineOptions(project) {
-    const secondsPerBeat = 60 / (project.bpm || 120);
-    const beatsPerBar = parseInt((project.time_signature || '4/4').split('/')[0], 10) || 4;
-    return {
-      height: 22,
-      timeInterval: secondsPerBeat,             // ein Tick pro Beat
-      // Taktanfang = jeder N-te Tick (GANZZAHL-Zählung statt Sekunden-Modulo,
-      // sonst driftet die Float-Rechnung und die dicken Linien hören auf).
-      primaryLabelSpacing: beatsPerBar,
-      primaryLabelInterval: 1e9,                // sekunden-basierte Primary-Logik aus
-      secondaryLabelInterval: 1e9,              // keine sekundären Labels/Striche
-      secondaryLabelOpacity: 0.4,              // Beat-Ticks etwas sichtbarer
-      timeOffset: Number(this.gridOffset) || 0, // Raster nach Intro verschieben
-      style: { fontSize: '10px', color: '#9aa0b0' },
-      formatTimeCallback: (sec) => {
-        const beat = Math.round(sec / secondsPerBeat);
-        const barIdx = Math.floor(beat / beatsPerBar);
-        return (beat % beatsPerBar === 0) ? String(barIdx + 1) : '';
+  /* ===================== Eigenes Beat-Grid (Canvas-Overlay) ===================== */
+  setupGridCanvas(container) {
+    if (gridCanvas) { try { gridCanvas.remove(); } catch (e) {} }
+    gridCanvas = document.createElement('canvas');
+    gridCanvas.className = 'grid-canvas';
+    container.appendChild(gridCanvas);
+    gridCtx = gridCanvas.getContext('2d');
+    if (!this._gridResize) {
+      this._gridResize = () => { this.resizeGridCanvas(); this.drawGrid(); };
+      window.addEventListener('resize', this._gridResize);
+    }
+  },
+
+  resizeGridCanvas() {
+    if (!gridCanvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = gridCanvas.clientWidth, h = gridCanvas.clientHeight;
+    gridCanvas.width = Math.max(1, Math.round(w * dpr));
+    gridCanvas.height = Math.max(1, Math.round(h * dpr));
+    if (gridCtx) gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  },
+
+  // sichtbarer Zeitausschnitt + Pixel/Sekunde aus Wavesurfer ableiten
+  gridViewport() {
+    if (!ws) return null;
+    const dur = ws.getDuration();
+    if (!dur) return null;
+    let pxPerSec = 0;
+    try {
+      const wrapper = ws.getWrapper();
+      const contentW = wrapper ? wrapper.scrollWidth : 0;
+      if (contentW) pxPerSec = contentW / dur;
+    } catch (e) {}
+    if (!pxPerSec) return null;
+    const startT = (ws.getScroll() || 0) / pxPerSec;
+    return { startT, pxPerSec };
+  },
+
+  scheduleGridDraw() {
+    if (gridRaf) return;
+    gridRaf = requestAnimationFrame(() => { gridRaf = 0; this.drawGrid(); });
+  },
+
+  // Zeichnet pro Tempo-Abschnitt das Beat-Raster (Takt 1 dick, Beats dünn).
+  // Lücken zwischen Abschnitten bleiben leer.
+  drawGrid() {
+    if (!gridCtx || !gridCanvas) return;
+    const w = gridCanvas.clientWidth, h = gridCanvas.clientHeight;
+    gridCtx.clearRect(0, 0, w, h);
+    const vp = this.gridViewport();
+    if (!vp) return;
+    const { startT, pxPerSec } = vp;
+    const endT = startT + w / pxPerSec;
+    const dur = ws.getDuration() || 0;
+
+    gridCtx.font = '10px -apple-system, sans-serif';
+    gridCtx.textBaseline = 'top';
+
+    for (const sec of this.sortedTempo) {
+      const bpm = Number(sec.bpm) || 120;
+      const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
+      const spb = 60 / bpm;
+      if (spb <= 0) continue;
+      const off = Number(sec.offset_sec) || 0;
+      const secStart = Number(sec.start_sec) || 0;
+      const secEnd = sec.end_sec == null ? dur : Number(sec.end_sec);
+      const from = Math.max(secStart, startT);
+      const to = Math.min(secEnd, endT);
+      if (to <= from) continue;
+      let k = Math.ceil((from - off) / spb - 1e-6);   // erster sichtbarer Beat-Index
+      for (; ; k++) {
+        const t = off + k * spb;
+        if (t > to + 1e-6) break;
+        if (t < secStart - 1e-6) continue;
+        const x = Math.round((t - startT) * pxPerSec) + 0.5;
+        const isBar = (((k % bpb) + bpb) % bpb) === 0;
+        gridCtx.beginPath();
+        gridCtx.strokeStyle = isBar ? 'rgba(195,204,255,0.85)' : 'rgba(150,160,180,0.30)';
+        gridCtx.lineWidth = isBar ? 2 : 1;
+        gridCtx.moveTo(x, isBar ? 0 : h * 0.5);
+        gridCtx.lineTo(x, h);
+        gridCtx.stroke();
+        if (isBar) {
+          gridCtx.fillStyle = 'rgba(195,204,255,0.9)';
+          gridCtx.fillText(String(Math.floor(k / bpb) + 1), x + 3, 2);
+        }
       }
+    }
+  },
+
+  /* ===================== Tempo-Abschnitte: CRUD + Feinjustage ===================== */
+  addTempoSection() {
+    if (!this.project) return;
+    const list = this.sortedTempo;
+    const last = list[list.length - 1];
+    let start = 0;
+    if (last) start = last.end_sec == null ? Math.min(this.duration || 0, (Number(last.start_sec) || 0) + 1) : Number(last.end_sec);
+    // offenes Ende des letzten Abschnitts schließen, damit nichts überlappt
+    if (last && last.end_sec == null) this.patchTempo(last, { end_sec: Math.round(start * 1000) / 1000 });
+    const sec = {
+      id: uuid(), project_id: this.project.id,
+      sort_index: this.tempoSections.length,
+      label: 'Lied ' + (this.tempoSections.length + 1),
+      start_sec: Math.round(start * 1000) / 1000, end_sec: null,
+      bpm: last ? Number(last.bpm) : 120,
+      time_signature: last ? last.time_signature : '4/4',
+      offset_sec: Math.round(start * 1000) / 1000
     };
+    this.tempoSections.push(sec);
+    db.tempoSections.put(sec).catch(() => {});
+    this.persistTempoInsert(sec);
+    this.drawGrid();
   },
 
-  /* Raster-Offset live aktualisieren: nur das Timeline-Plugin neu aufbauen
-     (kein erneutes Laden/Dekodieren des Audios). */
-  applyGridOffset() {
-    if (!ws) return;
-    if (this.project) this.project.grid_offset = this.gridOffset;
-    try { if (wsTimeline) wsTimeline.destroy(); } catch (e) {}
-    wsTimeline = ws.registerPlugin(TimelinePlugin.create(this.timelineOptions(this.project || {})));
+  async persistTempoInsert(sec) {
+    try {
+      const { error } = await sb.from('tempo_sections').insert(sec);
+      if (error) throw error;
+    } catch (e) {
+      await this.queue('tempo_sections', 'insert', sec.id, sec);
+      this.setStatus('Offline – Abschnitt gespeichert, wird synchronisiert');
+    }
   },
 
-  nudgeGrid(d) {
-    this.gridOffset = Math.max(0, Math.round((this.gridOffset + d) * 1000) / 1000);
-    this.applyGridOffset();
-    this.patchProject({ grid_offset: this.gridOffset });
+  // lokal sofort anwenden + debounced nach Supabase (mit Offline-Queue)
+  patchTempo(sec, patch) {
+    Object.assign(sec, patch);
+    db.tempoSections.put(JSON.parse(JSON.stringify(sec))).catch(() => {});
+    this.drawGrid();
+    tempoPending[sec.id] = Object.assign(tempoPending[sec.id] || {}, patch);
+    clearTimeout(tempoSaveTimers[sec.id]);
+    tempoSaveTimers[sec.id] = setTimeout(async () => {
+      const payload = tempoPending[sec.id]; delete tempoPending[sec.id];
+      if (!payload) return;
+      try {
+        const { error } = await sb.from('tempo_sections')
+          .update(Object.assign({}, payload, { updated_at: new Date().toISOString() }))
+          .eq('id', sec.id);
+        if (error) throw error;
+      } catch (e) {
+        this.queue('tempo_sections', 'update', sec.id, payload);
+        this.setStatus('Offline – Änderung gespeichert, wird synchronisiert');
+      }
+    }, 500);
   },
-  setGridToCursor() {
-    this.gridOffset = ws ? Math.round(ws.getCurrentTime() * 1000) / 1000 : 0;
-    this.applyGridOffset();
-    this.patchProject({ grid_offset: this.gridOffset });
+
+  async deleteTempoSection(sec) {
+    if (this.tempoSections.length <= 1) { this.setStatus('Mindestens ein Abschnitt muss bleiben'); return; }
+    if (!confirm(`Abschnitt „${sec.label || ''}" löschen? Schritte darin gehen verloren.`)) return;
+    this.tempoSections = this.tempoSections.filter(s => s.id !== sec.id);
+    db.tempoSections.delete(sec.id).catch(() => {});
+    this.drawGrid();
+    try {
+      const { error } = await sb.from('tempo_sections').delete().eq('id', sec.id);
+      if (error) throw error;
+    } catch (e) {
+      await this.queue('tempo_sections', 'delete', sec.id, null);
+    }
   },
-  resetGrid() {
-    this.gridOffset = 0;
-    this.applyGridOffset();
-    this.patchProject({ grid_offset: this.gridOffset });
+
+  setTimeSig(sec, v) { this.patchTempo(sec, { time_signature: v }); },
+  onBpmInput(sec, v) {
+    let n = parseFloat(v); if (isNaN(n)) return;
+    n = Math.min(400, Math.max(20, Math.round(n * 100) / 100));
+    this.patchTempo(sec, { bpm: n });
+  },
+  nudgeBpm(sec, d) {
+    let n = (Number(sec.bpm) || 120) + d;
+    n = Math.min(400, Math.max(20, Math.round(n * 100) / 100));
+    this.patchTempo(sec, { bpm: n });
+  },
+  // Takt-Abstand direkt nudgen -> rechnet auf BPM zurück (für krumme Werte)
+  nudgeBarLength(sec, deltaSec) {
+    const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
+    const next = Math.max(0.05, this.barLengthOf(sec) + deltaSec);
+    const bpm = Math.min(400, Math.max(20, Math.round((60 * bpb / next) * 100) / 100));
+    this.patchTempo(sec, { bpm });
+  },
+  nudgeOffset(sec, d) {
+    const v = Math.max(0, Math.round(((Number(sec.offset_sec) || 0) + d) * 1000) / 1000);
+    this.patchTempo(sec, { offset_sec: v });
+  },
+  offsetToCursor(sec) {
+    this.patchTempo(sec, { offset_sec: ws ? Math.round(ws.getCurrentTime() * 1000) / 1000 : 0 });
+  },
+  resetOffset(sec) { this.patchTempo(sec, { offset_sec: 0 }); },
+
+  // Start/Ende eines Abschnitts (Sekunden; leeres Ende = bis Schluss)
+  setTempoBound(sec, field, value) {
+    if (field === 'end_sec' && (value === '' || value == null)) { this.patchTempo(sec, { end_sec: null }); return; }
+    let n = parseFloat(value); if (isNaN(n)) return;
+    n = Math.max(0, Math.round(n * 1000) / 1000);
+    this.patchTempo(sec, { [field]: n });
+  },
+  boundToCursor(sec, field) {
+    this.patchTempo(sec, { [field]: ws ? Math.round(ws.getCurrentTime() * 1000) / 1000 : 0 });
   },
 
   /* ===================== Projekt-Einstellungen / Kalibrierung ===================== */
@@ -451,32 +660,6 @@ Alpine.data('choreo', () => ({
     this.settingsOpen = true;
   },
   closeSettings() { this.settingsOpen = false; },
-
-  setTimeSig(v) {
-    this.patchProject({ time_signature: v });
-    this.applyGridOffset();
-  },
-  onBpmInput(v) {
-    let n = parseFloat(v);
-    if (isNaN(n)) return;
-    n = Math.min(400, Math.max(20, Math.round(n * 100) / 100));
-    this.patchProject({ bpm: n });
-    this.applyGridOffset();
-  },
-  nudgeBpm(d) {
-    let n = (Number(this.project.bpm) || 120) + d;
-    n = Math.min(400, Math.max(20, Math.round(n * 100) / 100));
-    this.patchProject({ bpm: n });
-    this.applyGridOffset();
-  },
-  // Takt-Länge (Abstand dicker Linien) direkt nudgen -> rechnet auf BPM zurück
-  nudgeBarLength(deltaSec) {
-    const bpb = parseInt((this.project.time_signature || '4/4').split('/')[0], 10) || 4;
-    const next = Math.max(0.05, this.barLength + deltaSec);
-    let bpm = Math.min(400, Math.max(20, Math.round((60 * bpb / next) * 100) / 100));
-    this.patchProject({ bpm });
-    this.applyGridOffset();
-  },
 
   /* lokal sofort anwenden + gebündelt/debounced nach Supabase (mit Offline-Queue) */
   patchProject(patch) {
@@ -506,7 +689,9 @@ Alpine.data('choreo', () => ({
 
   destroyWs() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    if (ws) { try { ws.destroy(); } catch (e) {} ws = null; wsRegions = null; wsTimeline = null; }
+    if (gridRaf) { cancelAnimationFrame(gridRaf); gridRaf = 0; }
+    if (ws) { try { ws.destroy(); } catch (e) {} ws = null; wsRegions = null; }
+    if (gridCanvas) { try { gridCanvas.remove(); } catch (e) {} gridCanvas = null; gridCtx = null; }
     if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
   },
 
@@ -857,6 +1042,16 @@ Alpine.data('choreo', () => ({
       };
       const { data, error } = await sb.from('projects').insert(row).select().single();
       if (error) throw error;
+
+      // initialen Tempo-Abschnitt anlegen (gesamtes Lied)
+      const tsec = {
+        id: uuid(), project_id: data.id, sort_index: 0, label: null,
+        start_sec: 0, end_sec: null,
+        bpm: Number(this.form.bpm) || 120,
+        time_signature: this.form.time_signature, offset_sec: 0
+      };
+      try { const r = await sb.from('tempo_sections').insert(tsec); if (r.error) throw r.error; }
+      catch (e) { await this.queue('tempo_sections', 'insert', tsec.id, tsec); }
 
       // Blob sofort cachen -> erstes Öffnen ist instant & offline
       await db.audioCache.put({ projectId: data.id, blob: file, cachedAt: Date.now() }).catch(() => {});

@@ -21,8 +21,8 @@
       <button class="icon" @click="menuOpen = true" aria-label="Menü">☰</button>
       <div class="title">
         <span x-text="project ? project.title : 'Kein Projekt'"></span>
-        <template x-if="project">
-          <span class="meta" x-text="` · ${project.bpm} BPM · ${project.time_signature}`"></span>
+        <template x-if="activeTempo">
+          <span class="meta" x-text="` · ${activeTempo.bpm} BPM · ${activeTempo.time_signature}`"></span>
         </template>
       </div>
       <span x-show="!online" class="badge offline">offline</span>
@@ -190,13 +190,13 @@
     </div>
   </template>
 
-  <!-- ===== Projekt-Einstellungen / Takt-Kalibrierung ===== -->
+  <!-- ===== Projekt-Einstellungen / Tempo-Abschnitte ===== -->
   <template x-if="settingsOpen && project">
     <div>
       <div class="scrim" @click="closeSettings()"></div>
       <div class="modal modal-lg">
         <header>
-          <h2>Projekt-Einstellungen</h2>
+          <h2>Projekt &amp; Takt</h2>
           <button class="icon" @click="closeSettings()" aria-label="Schließen">✕</button>
         </header>
         <div class="body">
@@ -205,47 +205,79 @@
             <input type="text" :value="project.title" @input="patchProject({ title: $event.target.value })" />
           </div>
 
-          <div class="field">
-            <label>Taktart</label>
-            <select :value="project.time_signature" @change="setTimeSig($event.target.value)">
-              <option>4/4</option><option>3/4</option><option>2/4</option><option>6/8</option>
-            </select>
-          </div>
+          <div class="section-title">Tempo-Abschnitte (Lieder)</div>
+          <p class="hint">Mehrere Lieder/Tempi in einer Audiodatei: pro Abschnitt Start/Ende, BPM, Taktart und Raster-Start. Abschnitte dürfen sich nicht überlappen. „Ende" leer = bis zum Schluss.</p>
 
-          <div class="section-title">BPM</div>
-          <div class="calib-row">
-            <button class="icon" @click="nudgeBpm(-1)">−1</button>
-            <button class="icon" @click="nudgeBpm(-0.1)">−.1</button>
-            <input class="calib-val" type="number" step="0.01" min="20" max="400"
-                   :value="Number(project.bpm).toFixed(2)" @change="onBpmInput($event.target.value)" />
-            <button class="icon" @click="nudgeBpm(0.1)">+.1</button>
-            <button class="icon" @click="nudgeBpm(1)">+1</button>
-          </div>
+          <template x-for="sec in sortedTempo" :key="sec.id">
+            <div class="tempo-card">
+              <div class="tc-head">
+                <input class="tc-label" type="text" :value="sec.label || ''" placeholder="Abschnitt-Name"
+                       @input="patchTempo(sec, { label: $event.target.value })" />
+                <button class="icon danger" x-show="sortedTempo.length > 1" @click="deleteTempoSection(sec)" aria-label="Abschnitt löschen">🗑</button>
+              </div>
 
-          <div class="section-title">Takt-Abstand feinjustieren</div>
-          <p class="hint">Verschiebt den Abstand zweier dicker Taktlinien (passt die BPM fein an – ideal für krumme Werte). Aktuell: <strong x-text="barLength.toFixed(3) + ' s/Takt'"></strong></p>
-          <div class="calib-row">
-            <button class="icon" @click="nudgeBarLength(-0.01)">−10ms</button>
-            <button class="icon" @click="nudgeBarLength(-0.001)">−1ms</button>
-            <button class="icon" @click="nudgeBarLength(0.001)">+1ms</button>
-            <button class="icon" @click="nudgeBarLength(0.01)">+10ms</button>
-          </div>
+              <div class="field two" style="margin-bottom:8px">
+                <div style="flex:1">
+                  <label>Start (s)</label>
+                  <div class="calib-row" style="margin:0;gap:6px">
+                    <input type="number" step="0.001" min="0" :value="sec.start_sec"
+                           @change="setTempoBound(sec,'start_sec',$event.target.value)" />
+                    <button class="icon" @click="boundToCursor(sec,'start_sec')" title="auf Abspielposition">🎯</button>
+                  </div>
+                </div>
+                <div style="flex:1">
+                  <label>Ende (s)</label>
+                  <div class="calib-row" style="margin:0;gap:6px">
+                    <input type="number" step="0.001" min="0" :value="sec.end_sec ?? ''" placeholder="Schluss"
+                           @change="setTempoBound(sec,'end_sec',$event.target.value)" />
+                    <button class="icon" @click="boundToCursor(sec,'end_sec')" title="auf Abspielposition">🎯</button>
+                  </div>
+                </div>
+              </div>
 
-          <div class="section-title">Raster-Start (Intro-Offset)</div>
-          <p class="hint">Verschiebt den ersten Takt nach hinten, falls das Lied ein Intro hat.</p>
-          <div class="calib-row">
-            <button class="icon" @click="nudgeGrid(-0.05)">−50ms</button>
-            <button class="icon" @click="nudgeGrid(-0.005)">−5ms</button>
-            <span class="calib-val" x-text="gridOffset.toFixed(3) + ' s'"></span>
-            <button class="icon" @click="nudgeGrid(0.005)">+5ms</button>
-            <button class="icon" @click="nudgeGrid(0.05)">+50ms</button>
-          </div>
-          <div class="calib-row">
-            <button style="flex:1" @click="setGridToCursor()">🎯 auf Abspielposition</button>
-            <button @click="resetGrid()">⟲ Reset</button>
-          </div>
+              <div class="field" style="margin-bottom:8px">
+                <label>Taktart</label>
+                <select :value="sec.time_signature" @change="setTimeSig(sec,$event.target.value)">
+                  <option>4/4</option><option>3/4</option><option>2/4</option><option>6/8</option>
+                </select>
+              </div>
 
-          <div class="calib-row" style="margin-top:18px">
+              <label class="mini-label">BPM</label>
+              <div class="calib-row">
+                <button class="icon" @click="nudgeBpm(sec,-1)">−1</button>
+                <button class="icon" @click="nudgeBpm(sec,-0.1)">−.1</button>
+                <input class="calib-val" type="number" step="0.01" min="20" max="400"
+                       :value="Number(sec.bpm).toFixed(2)" @change="onBpmInput(sec,$event.target.value)" />
+                <button class="icon" @click="nudgeBpm(sec,0.1)">+.1</button>
+                <button class="icon" @click="nudgeBpm(sec,1)">+1</button>
+              </div>
+
+              <label class="mini-label">Takt-Abstand · <strong x-text="barLengthOf(sec).toFixed(3) + ' s'"></strong></label>
+              <div class="calib-row">
+                <button class="icon" @click="nudgeBarLength(sec,-0.01)">−10ms</button>
+                <button class="icon" @click="nudgeBarLength(sec,-0.001)">−1ms</button>
+                <button class="icon" @click="nudgeBarLength(sec,0.001)">+1ms</button>
+                <button class="icon" @click="nudgeBarLength(sec,0.01)">+10ms</button>
+              </div>
+
+              <label class="mini-label">Raster-Start (Intro-Offset)</label>
+              <div class="calib-row">
+                <button class="icon" @click="nudgeOffset(sec,-0.05)">−50ms</button>
+                <button class="icon" @click="nudgeOffset(sec,-0.005)">−5ms</button>
+                <span class="calib-val" x-text="(Number(sec.offset_sec)||0).toFixed(3) + ' s'"></span>
+                <button class="icon" @click="nudgeOffset(sec,0.005)">+5ms</button>
+                <button class="icon" @click="nudgeOffset(sec,0.05)">+50ms</button>
+              </div>
+              <div class="calib-row">
+                <button style="flex:1" @click="offsetToCursor(sec)">🎯 auf Abspielposition</button>
+                <button @click="resetOffset(sec)">⟲ Reset</button>
+              </div>
+            </div>
+          </template>
+
+          <button class="primary" style="width:100%;margin-top:4px" @click="addTempoSection()">＋ Abschnitt hinzufügen</button>
+
+          <div class="calib-row" style="margin-top:16px">
             <button @click="togglePlay()" x-text="isPlaying ? 'Pause' : 'Abspielen'"></button>
             <button class="primary" style="flex:1" @click="closeSettings()">Fertig</button>
           </div>
