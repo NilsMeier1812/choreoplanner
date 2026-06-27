@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 16;
+const APP_VERSION = 17;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -111,6 +111,7 @@ Alpine.data('choreo', () => ({
   loginPassword: '',
   loginError: '',
   loggingIn: false,
+  showPw: false,
 
   online: navigator.onLine,
   toast: '',
@@ -125,7 +126,7 @@ Alpine.data('choreo', () => ({
   parts: [],                        // Gruppen-Abschnitte (Zeitbereiche)
   memberships: [],                  // Gruppen-Zuteilungen (part_id, person_number, group_number)
   myPersonNumber: 0,                // "Ich bin Person X" (0 = niemand)
-  bottomTab: 'notes',               // 'notes' | 'groups' | 'steps'
+  bottomTab: 'steps',               // 'steps' | 'notes'
   steps: [],                        // Schritte (Herren/Damen, an Beats geklebt)
   stepDisplay: 'dots',              // 'dots' | 'letters' | 'numbers'
   editRole: 'herren',               // welche Lane wird gerade bearbeitet
@@ -294,7 +295,7 @@ Alpine.data('choreo', () => ({
     });
   },
 
-  openLogin() { this.loginError = ''; this.loginPassword = ''; this.loginOpen = true; },
+  openLogin() { this.loginError = ''; this.loginPassword = ''; this.showPw = false; this.loginOpen = true; },
   closeLogin() { this.loginOpen = false; },
 
   async doLogin() {
@@ -444,7 +445,7 @@ Alpine.data('choreo', () => ({
     this.renderRegions();
     this.resizeGridCanvas();
     this.resizeLaneCanvas();
-    this.recomputePxPerSec();
+    this.recomputeViewport();
     this.scheduleDraw();
   },
 
@@ -501,10 +502,14 @@ Alpine.data('choreo', () => ({
     ws.on('finish', () => { this.isPlaying = false; });
     ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.scheduleDraw(); });
     ws.on('error', (err) => this.handleAudioError(err));
-    // Grid + Lanes an Scroll/Zoom/Redraw koppeln; px/s nur bei Zoom/Redraw neu berechnen
-    ws.on('scroll', () => this.scheduleDraw());
-    ws.on('zoom', () => { this.recomputePxPerSec(); this.scheduleDraw(); });
-    ws.on('redraw', () => { this.recomputePxPerSec(); this.scheduleDraw(); });
+    // Grid + Lanes an Scroll/Zoom/Redraw koppeln. 'scroll' liefert den exakten
+    // Sichtbereich (gleicher Bezug wie die Welle) -> kein Versatz Anzeige/Musik.
+    ws.on('scroll', (vStart, vEnd, sLeft, sRight) => {
+      if (vEnd > vStart && sRight > sLeft) { cachedPxPerSec = (sRight - sLeft) / (vEnd - vStart); this._vpStartT = vStart; }
+      this.scheduleDraw();
+    });
+    ws.on('zoom', () => { this.recomputeViewport(); this.scheduleDraw(); });
+    ws.on('redraw', () => { this.recomputeViewport(); this.scheduleDraw(); });
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
@@ -519,7 +524,7 @@ Alpine.data('choreo', () => ({
     gridCtx = gridCanvas.getContext('2d');
     if (!this._onResize) {
       // ein Resize-Handler für beide Canvases
-      this._onResize = () => { this.resizeGridCanvas(); this.resizeLaneCanvas(); this.recomputePxPerSec(); this.scheduleDraw(); };
+      this._onResize = () => { this.resizeGridCanvas(); this.resizeLaneCanvas(); this.recomputeViewport(); this.scheduleDraw(); };
       window.addEventListener('resize', this._onResize);
     }
   },
@@ -533,18 +538,19 @@ Alpine.data('choreo', () => ({
     if (gridCtx) gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   },
 
-  // px/Sekunde nur neu berechnen, wenn sich die Inhaltsbreite ändert (Zoom/Resize/Ready).
-  // Das vermeidet teure Layout-Reads (scrollWidth) in jedem Playback-Frame.
-  recomputePxPerSec() {
+  // Sichtbereich aus Wavesurfer ableiten. Primär liefert das 'scroll'-Event
+  // (visibleStartTime + scrollLeft/Right) den EXAKT gleichen Bezug wie die Welle.
+  // Hier nur die Inhaltsbreite (scrollWidth) als Fallback bei Zoom/Resize/Ready.
+  recomputeViewport() {
     cachedPxPerSec = 0;
     if (!ws) return;
     const dur = ws.getDuration(); if (!dur) return;
     try { const wr = ws.getWrapper(); const cw = wr ? wr.scrollWidth : 0; if (cw) cachedPxPerSec = cw / dur; } catch (e) {}
+    if (cachedPxPerSec) this._vpStartT = (ws.getScroll() || 0) / cachedPxPerSec;
   },
-  // sichtbarer Zeitausschnitt (nur leichter getScroll()-Read pro Frame)
   gridViewport() {
     if (!ws || !cachedPxPerSec) return null;
-    return { startT: (ws.getScroll() || 0) / cachedPxPerSec, pxPerSec: cachedPxPerSec };
+    return { startT: this._vpStartT || 0, pxPerSec: cachedPxPerSec };
   },
 
   // EIN gemeinsamer Redraw pro Frame -> Grid + Lanes teilen sich ein Viewport-Read
@@ -770,7 +776,7 @@ Alpine.data('choreo', () => ({
     this.debouncedUpdate('persons', p.id, { name });
   },
   removePerson(p) {
-    if (!confirm(`Person ${p.number}${p.name ? ' (' + p.name + ')' : ''} löschen?`)) return;
+    if (!confirm(`Paar ${p.number}${p.name ? ' (' + p.name + ')' : ''} löschen?`)) return;
     this.persons = this.persons.filter(x => x.id !== p.id);
     this.memberships = this.memberships.filter(m => Number(m.person_number) !== Number(p.number));
     db.persons.delete(p.id).catch(() => {});
@@ -1018,7 +1024,7 @@ Alpine.data('choreo', () => ({
       } else {
         const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
         let label;
-        if (this.stepDisplay === 'letters') label = this.isOffbeat(st) ? 'U' : (Number(st.length_beats) >= 2 ? 'L' : 'S');
+        if (this.stepDisplay === 'letters') label = this.isOffbeat(st) ? 'u' : (Number(st.length_beats) >= 2 ? 'L' : 'S');
         else { const base = Math.floor(Number(st.beat_pos) + 1e-6); label = this.isOffbeat(st) ? 'u' : String((((base % bpb) + bpb) % bpb) + 1); }
         laneCtx.fillStyle = col;
         laneCtx.fillText(label, x, cy);
@@ -1090,7 +1096,7 @@ Alpine.data('choreo', () => ({
   clearSteps() {
     const toDel = this.steps.filter(s => s.role === this.editRole && Number(s.group_number) === Number(this.editGroup));
     if (!toDel.length) { this.setStatus('Keine Schritte in dieser Auswahl'); return; }
-    if (!confirm(`Alle ${toDel.length} ${this.editRole === 'herren' ? 'Herren' : 'Damen'}-Schritte (Gruppe ${this.editGroup}) löschen?`)) return;
+    if (!confirm(`Alle ${toDel.length} ${this.editRole === 'herren' ? 'Leader' : 'Follower'}-Schritte (Gruppe ${this.editGroup}) löschen?`)) return;
     const ids = new Set(toDel.map(s => s.id));
     this.steps = this.steps.filter(s => !ids.has(s.id));
     for (const s of toDel) { db.steps.delete(s.id).catch(() => {}); this.persistGeneric('steps', 'delete', s); }

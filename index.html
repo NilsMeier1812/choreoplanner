@@ -54,8 +54,8 @@
 
     <!-- mitlaufende Schritt-Lanes (Canvas wird per JS eingehängt) -->
     <div id="lanes">
-      <span class="lane-label lane-h">♂</span>
-      <span class="lane-label lane-d">♀</span>
+      <span class="lane-label lane-h">L</span>
+      <span class="lane-label lane-d">F</span>
     </div>
   </section>
 
@@ -76,9 +76,8 @@
   <!-- ===== Unterer Bereich: Tabs ===== -->
   <section id="bottom-section">
     <div class="tabbar">
-      <button :class="{ active: bottomTab === 'steps' }" @click="setTab('steps')">Schritte</button>
+      <button :class="{ active: bottomTab === 'steps' }" @click="setTab('steps')">Schritte &amp; Gruppen</button>
       <button :class="{ active: bottomTab === 'notes' }" @click="setTab('notes')">Notizen</button>
-      <button :class="{ active: bottomTab === 'groups' }" @click="setTab('groups')">Gruppen</button>
     </div>
 
     <div class="tab-content">
@@ -121,35 +120,100 @@
         </template>
       </div>
 
-      <!-- Tab: Gruppen -->
-      <div x-show="bottomTab === 'groups'" class="tab-pane">
-        <div class="field" style="margin-bottom:14px">
-          <label>Ich bin Person</label>
+      <!-- Tab: Schritte & Gruppen -->
+      <div x-show="bottomTab === 'steps'" class="tab-pane">
+
+        <!-- Paar-Auswahl: bestimmt, welche Schritte in den Spuren gezeigt werden -->
+        <div class="field" style="margin-bottom:10px">
+          <label>Ich bin Paar</label>
           <select :value="myPersonNumber" @change="setMyPerson($event.target.value)">
-            <option value="0">— niemand —</option>
+            <option value="0">— Paar wählen —</option>
             <template x-for="p in sortedPersons" :key="p.id">
-              <option :value="p.number" x-text="'Person ' + p.number + (p.name ? ' (' + p.name + ')' : '')"></option>
+              <option :value="p.number" x-text="'Paar ' + p.number + (p.name ? ' (' + p.name + ')' : '')"></option>
             </template>
           </select>
           <template x-if="myPersonNumber && activePart">
-            <p class="hint" style="margin-top:6px">
-              Aktuell (<span x-text="activePart.label"></span>):
-              <strong x-text="myGroup ? 'Gruppe ' + myGroup : 'keine Gruppe / alle gleich'"></strong>
-            </p>
-          </template>
-          <template x-if="myPersonNumber && !activePart">
-            <p class="hint" style="margin-top:6px">An dieser Stelle ist kein Gruppen-Abschnitt definiert.</p>
+            <p class="hint" style="margin-top:6px">Aktuell (<span x-text="activePart.label"></span>): <strong x-text="myGroup ? 'Gruppe ' + myGroup : 'keine Gruppe / alle gleich'"></strong></p>
           </template>
         </div>
 
+        <!-- Anzeige-Modus -->
+        <div class="mode-toggle" style="width:100%;margin-bottom:8px">
+          <button :class="{ active: stepDisplay === 'dots' }" @click="setStepDisplay('dots')" style="flex:1">Punkte</button>
+          <button :class="{ active: stepDisplay === 'letters' }" @click="setStepDisplay('letters')" style="flex:1">L·S·u</button>
+          <button :class="{ active: stepDisplay === 'numbers' }" @click="setStepDisplay('numbers')" style="flex:1">Zahlen</button>
+        </div>
+        <p class="hint">
+          Spuren: <strong>L</strong> = Leader, <strong>F</strong> = Follower &nbsp;·&nbsp;
+          <span style="color:#6c8cff">●</span> linker Fuß <span style="color:#ff5a5a">●</span> rechter Fuß &nbsp;·&nbsp;
+          L = Lang (2) · S = Schnell (1) · u = „und" (Offbeat)
+        </p>
+
         <template x-if="!isEditor">
-          <p class="empty">Zum Bearbeiten von Personen &amp; Gruppen als Editor anmelden.</p>
+          <p class="empty">Zum Eintragen/Einrichten als Editor anmelden.</p>
+        </template>
+        <template x-if="isEditor && currentMode !== 'editor'">
+          <p class="empty">Oben in den <strong>Editor-Modus</strong> wechseln, um Schritte &amp; Gruppen zu bearbeiten.</p>
         </template>
 
-        <template x-if="isEditor">
+        <template x-if="currentMode === 'editor'">
           <div>
-            <div class="section-title">Abschnitte &amp; Gruppen</div>
-            <p class="hint">Pro Abschnitt jeder Person eine Gruppe geben (Tippen schaltet weiter: – ▸ 1 ▸ 2 …). „–" = keine Gruppe / alle gleich.</p>
+            <!-- ===== Schritte eintragen ===== -->
+            <div class="section-title">Schritte eintragen</div>
+
+            <label class="mini-label">Spur</label>
+            <div class="mode-toggle" style="width:100%">
+              <button :class="{ active: editRole === 'herren' }" @click="setEditRole('herren')" style="flex:1">Leader</button>
+              <button :class="{ active: editRole === 'damen' }" @click="setEditRole('damen')" style="flex:1">Follower</button>
+            </div>
+
+            <label class="mini-label">Gruppe (0 = alle)</label>
+            <div class="calib-row">
+              <button class="icon" @click="nudgeEditGroup(-1)">−</button>
+              <span class="calib-val" x-text="editGroup === 0 ? 'alle' : ('Gruppe ' + editGroup)"></span>
+              <button class="icon" @click="nudgeEditGroup(1)">＋</button>
+            </div>
+
+            <label class="mini-label">Fuß</label>
+            <div class="mode-toggle" style="width:100%">
+              <button :class="{ active: editFoot === 'auto' }" @click="editFoot = 'auto'" style="flex:1">Auto</button>
+              <button :class="{ active: editFoot === 'L' }" @click="editFoot = 'L'" style="flex:1;color:#6c8cff">Links</button>
+              <button :class="{ active: editFoot === 'R' }" @click="editFoot = 'R'" style="flex:1;color:#ff5a5a">Rechts</button>
+            </div>
+
+            <label class="mini-label">Wert</label>
+            <div class="mode-toggle" style="width:100%">
+              <button :class="{ active: editValue === 'S' }" @click="editValue = 'S'" style="flex:1">S · 1</button>
+              <button :class="{ active: editValue === 'L' }" @click="editValue = 'L'" style="flex:1">L · 2</button>
+              <button :class="{ active: editValue === 'U' }" @click="editValue = 'U'" style="flex:1">u · und</button>
+            </div>
+
+            <label class="mini-label">Raster</label>
+            <div class="mode-toggle" style="width:100%">
+              <button :class="{ active: editSnap === 'beat' }" @click="editSnap = 'beat'" style="flex:1">ganzer Beat</button>
+              <button :class="{ active: editSnap === 'half' }" @click="editSnap = 'half'" style="flex:1">½ Beat</button>
+            </div>
+
+            <button class="primary" style="width:100%;margin-top:12px;padding:14px" @click="tapStep()">● Schritt an Position setzen</button>
+            <p class="hint">Abspielen und im Takt auf den Button tippen – oder direkt in die L-/F-Spur unter der Welle tippen. Nochmal auf einen Schritt tippen entfernt ihn.</p>
+
+            <div class="section-title" style="display:flex;align-items:center;gap:8px">
+              <span style="flex:1">Liste · <span x-text="editRole === 'herren' ? 'Leader' : 'Follower'"></span> · <span x-text="editGroup === 0 ? 'alle' : 'Gr. ' + editGroup"></span></span>
+              <button class="danger" style="padding:4px 8px;font-size:12px" @click="clearSteps()">Alle löschen</button>
+            </div>
+            <template x-if="!editSteps.length"><p class="hint">Noch keine Schritte in dieser Auswahl.</p></template>
+            <template x-for="o in editSteps" :key="o.s.id">
+              <div class="step-row">
+                <button class="ts" @click="seekTo(o.t)" x-text="fmt(o.t)"></button>
+                <button class="foot-chip" :class="o.s.foot === 'R' ? 'foot-r' : 'foot-l'" @click="toggleStepFoot(o.s)" x-text="o.s.foot === 'R' ? 'R' : 'L'"></button>
+                <span class="step-val" x-text="isOffbeat(o.s) ? 'u' : (Number(o.s.length_beats) >= 2 ? 'L' : 'S')"></span>
+                <button class="icon danger" @click="deleteStep(o.s)" aria-label="Schritt löschen">🗑</button>
+              </div>
+            </template>
+
+            <!-- ===== Abschnitte & Gruppen ===== -->
+            <div class="section-title" style="margin-top:20px">Abschnitte &amp; Gruppen</div>
+            <p class="hint">Abschnitt anlegen (z.B. Sek 22–26), dann jedem Paar eine Gruppe geben (Tippen schaltet weiter: – ▸ 1 ▸ 2 …). „–" = alle gleich. Ein Paar sieht im Abschnitt die Schritte seiner Gruppe.</p>
             <template x-for="part in sortedParts" :key="part.id">
               <div class="tempo-card">
                 <div class="tc-head">
@@ -170,7 +234,7 @@
                     </div>
                   </div>
                 </div>
-                <label class="mini-label">Gruppen-Zuteilung</label>
+                <label class="mini-label">Gruppen-Zuteilung (pro Paar)</label>
                 <div class="chip-grid">
                   <template x-for="p in sortedPersons" :key="p.id">
                     <button class="grp-chip" :class="'g' + groupOf(part, p.number)" @click="cycleGroup(part, p.number)">
@@ -179,97 +243,22 @@
                     </button>
                   </template>
                 </div>
-                <template x-if="!sortedPersons.length"><p class="hint">Erst Personen anlegen.</p></template>
+                <template x-if="!sortedPersons.length"><p class="hint">Erst Paare anlegen.</p></template>
               </div>
             </template>
             <button class="primary" style="width:100%;margin-top:4px" @click="addPart()">＋ Abschnitt</button>
 
-            <div class="section-title" style="margin-top:18px">Personen</div>
+            <!-- ===== Paare ===== -->
+            <div class="section-title" style="margin-top:20px">Paare</div>
             <template x-for="p in sortedPersons" :key="p.id">
               <div class="person-row">
                 <span class="person-num" x-text="p.number"></span>
                 <input type="text" :value="p.name || ''" placeholder="Name (optional)" @input="renamePerson(p, $event.target.value)" />
-                <button class="icon danger" @click="removePerson(p)" aria-label="Person löschen">🗑</button>
+                <button class="icon danger" @click="removePerson(p)" aria-label="Paar löschen">🗑</button>
               </div>
             </template>
-            <template x-if="!sortedPersons.length"><p class="hint">Noch keine Personen.</p></template>
-            <button class="primary" style="width:100%;margin:4px 0 4px" @click="addPerson()">＋ Person</button>
-          </div>
-        </template>
-      </div>
-
-      <!-- Tab: Schritte -->
-      <div x-show="bottomTab === 'steps'" class="tab-pane">
-        <div class="mode-toggle" style="width:100%;margin-bottom:10px">
-          <button :class="{ active: stepDisplay === 'dots' }" @click="setStepDisplay('dots')" style="flex:1">Punkte</button>
-          <button :class="{ active: stepDisplay === 'letters' }" @click="setStepDisplay('letters')" style="flex:1">L·S·U</button>
-          <button :class="{ active: stepDisplay === 'numbers' }" @click="setStepDisplay('numbers')" style="flex:1">Zahlen</button>
-        </div>
-        <p class="hint">
-          <span style="color:#6c8cff">●</span> linker Fuß &nbsp; <span style="color:#ff5a5a">●</span> rechter Fuß
-          &nbsp;·&nbsp; L = Lang (2) · S = Schnell (1) · U = „und" (Offbeat)
-        </p>
-
-        <template x-if="!isEditor">
-          <p class="empty">Zum Eintragen von Schritten als Editor anmelden.</p>
-        </template>
-        <template x-if="isEditor && currentMode !== 'editor'">
-          <p class="empty">Oben in den <strong>Editor-Modus</strong> wechseln, um Schritte einzutragen.</p>
-        </template>
-
-        <template x-if="currentMode === 'editor'">
-          <div>
-            <div class="section-title">Schritte eintragen</div>
-
-            <label class="mini-label">Spur</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editRole === 'herren' }" @click="setEditRole('herren')" style="flex:1">♂ Herren</button>
-              <button :class="{ active: editRole === 'damen' }" @click="setEditRole('damen')" style="flex:1">♀ Damen</button>
-            </div>
-
-            <label class="mini-label">Gruppe</label>
-            <div class="calib-row">
-              <button class="icon" @click="nudgeEditGroup(-1)">−</button>
-              <span class="calib-val" x-text="editGroup === 0 ? 'alle' : ('Gruppe ' + editGroup)"></span>
-              <button class="icon" @click="nudgeEditGroup(1)">＋</button>
-            </div>
-
-            <label class="mini-label">Fuß</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editFoot === 'auto' }" @click="editFoot = 'auto'" style="flex:1">Auto</button>
-              <button :class="{ active: editFoot === 'L' }" @click="editFoot = 'L'" style="flex:1;color:#6c8cff">Links</button>
-              <button :class="{ active: editFoot === 'R' }" @click="editFoot = 'R'" style="flex:1;color:#ff5a5a">Rechts</button>
-            </div>
-
-            <label class="mini-label">Wert</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editValue === 'S' }" @click="editValue = 'S'" style="flex:1">S · 1</button>
-              <button :class="{ active: editValue === 'L' }" @click="editValue = 'L'" style="flex:1">L · 2</button>
-              <button :class="{ active: editValue === 'U' }" @click="editValue = 'U'" style="flex:1">U · und</button>
-            </div>
-
-            <label class="mini-label">Raster</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editSnap === 'beat' }" @click="editSnap = 'beat'" style="flex:1">ganzer Beat</button>
-              <button :class="{ active: editSnap === 'half' }" @click="editSnap = 'half'" style="flex:1">½ Beat</button>
-            </div>
-
-            <button class="primary" style="width:100%;margin-top:12px;padding:14px" @click="tapStep()">● Schritt an Position setzen</button>
-            <p class="hint">Abspielen und im Takt auf den Button tippen – oder direkt in die ♂/♀-Spur unter der Welle tippen. Nochmal auf einen Schritt tippen entfernt ihn.</p>
-
-            <div class="section-title" style="display:flex;align-items:center;gap:8px">
-              <span style="flex:1">Liste · <span x-text="editRole === 'herren' ? 'Herren' : 'Damen'"></span> · <span x-text="editGroup === 0 ? 'alle' : 'Gr. ' + editGroup"></span></span>
-              <button class="danger" style="padding:4px 8px;font-size:12px" @click="clearSteps()">Alle löschen</button>
-            </div>
-            <template x-if="!editSteps.length"><p class="hint">Noch keine Schritte in dieser Auswahl.</p></template>
-            <template x-for="o in editSteps" :key="o.s.id">
-              <div class="step-row">
-                <button class="ts" @click="seekTo(o.t)" x-text="fmt(o.t)"></button>
-                <button class="foot-chip" :class="o.s.foot === 'R' ? 'foot-r' : 'foot-l'" @click="toggleStepFoot(o.s)" x-text="o.s.foot === 'R' ? 'R' : 'L'"></button>
-                <span class="step-val" x-text="isOffbeat(o.s) ? 'U' : (Number(o.s.length_beats) >= 2 ? 'L' : 'S')"></span>
-                <button class="icon danger" @click="deleteStep(o.s)" aria-label="Schritt löschen">🗑</button>
-              </div>
-            </template>
+            <template x-if="!sortedPersons.length"><p class="hint">Noch keine Paare.</p></template>
+            <button class="primary" style="width:100%;margin:4px 0 4px" @click="addPerson()">＋ Paar</button>
           </div>
         </template>
       </div>
@@ -485,8 +474,12 @@
         <header><h2>Editor anmelden 🔒</h2><button class="icon" @click="closeLogin()" aria-label="Schließen">✕</button></header>
         <div class="body">
           <p class="hint">Bearbeiten ist nur mit dem gemeinsamen Editor-Passwort möglich. Ansehen &amp; Training geht für alle ohne Login.</p>
-          <input type="password" x-model="loginPassword" placeholder="Editor-Passwort"
-                 autocomplete="current-password" @keydown.enter="doLogin()" />
+          <div class="pw-row">
+            <input :type="showPw ? 'text' : 'password'" x-model="loginPassword" placeholder="Editor-Passwort"
+                   autocomplete="current-password" @keydown.enter="doLogin()" />
+            <button type="button" class="icon" @click="showPw = !showPw"
+                    :aria-label="showPw ? 'Passwort verbergen' : 'Passwort anzeigen'" x-text="showPw ? '🙈' : '👁'"></button>
+          </div>
           <div x-show="loginError" style="color:var(--danger);font-size:13px;margin-top:8px" x-text="loginError"></div>
           <button class="primary" style="width:100%;margin-top:12px"
                   :disabled="!loginPassword || loggingIn" @click="doLogin()"
