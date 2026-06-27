@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 15;
+const APP_VERSION = 16;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -56,10 +56,10 @@ let ws = null;
 let wsRegions = null;
 let gridCanvas = null;             // eigenes Beat-Grid (Overlay über dem Waveform)
 let gridCtx = null;
-let gridRaf = 0;                   // requestAnimationFrame-Drossel fürs Neuzeichnen
 let laneCanvas = null;             // Schritt-Lanes (Herren/Damen) unter der Welle
 let laneCtx = null;
-let laneRaf = 0;
+let drawRaf = 0;                   // EINE rAF-Drossel für Grid + Lanes (gegen Ruckeln)
+let cachedPxPerSec = 0;            // Pixel/Sekunde – nur bei Zoom/Resize neu berechnet
 const lastFoot = { herren: null, damen: null };  // für Auto-Fußwechsel beim Eintragen
 let app = null;                    // Referenz auf die Alpine-Komponente
 let heartbeatTimer = null;
@@ -306,9 +306,9 @@ Alpine.data('choreo', () => ({
       if (error) throw error;
       this.loginPassword = '';
       this.loginOpen = false;
-      this.setStatus('Editor-Modus freigeschaltet');
-      // direkt in den Editor wechseln, wenn ein Projekt offen ist
-      if (this.project && this.currentMode === 'training') await this.enterEditor();
+      // NICHT automatisch in den Editor wechseln – angemeldet sein heißt nur,
+      // dass man bearbeiten DARF. Training/Editor wählt man weiter über den Umschalter.
+      this.setStatus('Angemeldet – zum Bearbeiten „Editor" wählen');
     } catch (e) {
       this.loginError = 'Passwort falsch (oder offline). Bitte erneut versuchen.';
     } finally {
@@ -444,8 +444,8 @@ Alpine.data('choreo', () => ({
     this.renderRegions();
     this.resizeGridCanvas();
     this.resizeLaneCanvas();
-    this.scheduleGridDraw();
-    this.scheduleLaneDraw();
+    this.recomputePxPerSec();
+    this.scheduleDraw();
   },
 
   handleAudioError(err) {
@@ -499,12 +499,12 @@ Alpine.data('choreo', () => ({
     ws.on('play', () => { this.isPlaying = true; });
     ws.on('pause', () => { this.isPlaying = false; });
     ws.on('finish', () => { this.isPlaying = false; });
-    ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.scheduleLaneDraw(); });
+    ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.scheduleDraw(); });
     ws.on('error', (err) => this.handleAudioError(err));
-    // Grid + Lanes an Scroll/Zoom/Redraw von Wavesurfer koppeln
-    ws.on('scroll', () => { this.scheduleGridDraw(); this.scheduleLaneDraw(); });
-    ws.on('zoom', () => { this.scheduleGridDraw(); this.scheduleLaneDraw(); });
-    ws.on('redraw', () => { this.scheduleGridDraw(); this.scheduleLaneDraw(); });
+    // Grid + Lanes an Scroll/Zoom/Redraw koppeln; px/s nur bei Zoom/Redraw neu berechnen
+    ws.on('scroll', () => this.scheduleDraw());
+    ws.on('zoom', () => { this.recomputePxPerSec(); this.scheduleDraw(); });
+    ws.on('redraw', () => { this.recomputePxPerSec(); this.scheduleDraw(); });
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
@@ -517,9 +517,10 @@ Alpine.data('choreo', () => ({
     gridCanvas.className = 'grid-canvas';
     container.appendChild(gridCanvas);
     gridCtx = gridCanvas.getContext('2d');
-    if (!this._gridResize) {
-      this._gridResize = () => { this.resizeGridCanvas(); this.drawGrid(); };
-      window.addEventListener('resize', this._gridResize);
+    if (!this._onResize) {
+      // ein Resize-Handler für beide Canvases
+      this._onResize = () => { this.resizeGridCanvas(); this.resizeLaneCanvas(); this.recomputePxPerSec(); this.scheduleDraw(); };
+      window.addEventListener('resize', this._onResize);
     }
   },
 
@@ -532,34 +533,40 @@ Alpine.data('choreo', () => ({
     if (gridCtx) gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   },
 
-  // sichtbarer Zeitausschnitt + Pixel/Sekunde aus Wavesurfer ableiten
+  // px/Sekunde nur neu berechnen, wenn sich die Inhaltsbreite ändert (Zoom/Resize/Ready).
+  // Das vermeidet teure Layout-Reads (scrollWidth) in jedem Playback-Frame.
+  recomputePxPerSec() {
+    cachedPxPerSec = 0;
+    if (!ws) return;
+    const dur = ws.getDuration(); if (!dur) return;
+    try { const wr = ws.getWrapper(); const cw = wr ? wr.scrollWidth : 0; if (cw) cachedPxPerSec = cw / dur; } catch (e) {}
+  },
+  // sichtbarer Zeitausschnitt (nur leichter getScroll()-Read pro Frame)
   gridViewport() {
-    if (!ws) return null;
-    const dur = ws.getDuration();
-    if (!dur) return null;
-    let pxPerSec = 0;
-    try {
-      const wrapper = ws.getWrapper();
-      const contentW = wrapper ? wrapper.scrollWidth : 0;
-      if (contentW) pxPerSec = contentW / dur;
-    } catch (e) {}
-    if (!pxPerSec) return null;
-    const startT = (ws.getScroll() || 0) / pxPerSec;
-    return { startT, pxPerSec };
+    if (!ws || !cachedPxPerSec) return null;
+    return { startT: (ws.getScroll() || 0) / cachedPxPerSec, pxPerSec: cachedPxPerSec };
   },
 
-  scheduleGridDraw() {
-    if (gridRaf) return;
-    gridRaf = requestAnimationFrame(() => { gridRaf = 0; this.drawGrid(); });
+  // EIN gemeinsamer Redraw pro Frame -> Grid + Lanes teilen sich ein Viewport-Read
+  scheduleDraw() {
+    if (drawRaf) return;
+    drawRaf = requestAnimationFrame(() => {
+      drawRaf = 0;
+      const vp = this.gridViewport();
+      this.drawGrid(vp);
+      this.drawLanes(vp);
+    });
   },
+  scheduleGridDraw() { this.scheduleDraw(); },
+  scheduleLaneDraw() { this.scheduleDraw(); },
 
   // Zeichnet pro Tempo-Abschnitt das Beat-Raster (Takt 1 dick, Beats dünn).
   // Lücken zwischen Abschnitten bleiben leer.
-  drawGrid() {
+  drawGrid(vp) {
     if (!gridCtx || !gridCanvas) return;
+    if (vp === undefined) vp = this.gridViewport();
     const w = gridCanvas.clientWidth, h = gridCanvas.clientHeight;
     gridCtx.clearRect(0, 0, w, h);
-    const vp = this.gridViewport();
     if (!vp) return;
     const { startT, pxPerSec } = vp;
     const endT = startT + w / pxPerSec;
@@ -889,17 +896,32 @@ Alpine.data('choreo', () => ({
     return Number(sec.offset_sec || 0) + Number(s.beat_pos) * (60 / (Number(sec.bpm) || 120));
   },
   isOffbeat(s) { const b = Number(s.beat_pos); return Math.abs(b - Math.round(b)) > 0.1; },
-  // Welche Schritte einer Rolle sichtbar sind (Editier- vs. Trainingsfilter)
-  visibleStepsFor(role) {
-    const editing = this.bottomTab === 'steps' && this.isEditor;
-    return this.steps.filter(s => {
-      if (s.role !== role) return false;
-      if (editing) return Number(s.group_number) === Number(this.editGroup);
-      if (Number(s.group_number) === 0) return true;       // „alle"
-      if (!this.myPersonNumber) return false;              // niemand gewählt -> nur „alle"
-      const t = this.stepTime(s); if (t == null) return false;
-      return Number(s.group_number) === this.groupOf(this.partAt(t), this.myPersonNumber);
-    });
+  // Sichtbare Schritte einer Rolle als { s, dim }.
+  //  - Editier-Modus (Editor + Schritte-Tab): die bearbeitete Gruppe voll, dazu
+  //    die „alle"-Schritte (Gruppe 0) gedimmt zur Orientierung.
+  //  - Training: Gruppe 0 + die Gruppe der gewählten Person je Abschnitt.
+  laneEntries(role) {
+    const editing = this.currentMode === 'editor' && this.bottomTab === 'steps';
+    const out = [];
+    if (editing) {
+      const g = Number(this.editGroup);
+      for (const s of this.steps) {
+        if (s.role !== role) continue;
+        const sg = Number(s.group_number);
+        if (sg === g) out.push({ s, dim: false });
+        else if (g !== 0 && sg === 0) out.push({ s, dim: true });   // „alle" mitzeigen
+      }
+    } else {
+      for (const s of this.steps) {
+        if (s.role !== role) continue;
+        const sg = Number(s.group_number);
+        if (sg === 0) { out.push({ s, dim: false }); continue; }
+        if (!this.myPersonNumber) continue;
+        const t = this.stepTime(s); if (t == null) continue;
+        if (sg === this.groupOf(this.partAt(t), this.myPersonNumber)) out.push({ s, dim: false });
+      }
+    }
+    return out;
   },
 
   /* ===================== Schritt-Lanes (Canvas) ===================== */
@@ -911,10 +933,6 @@ Alpine.data('choreo', () => ({
     container.appendChild(laneCanvas);
     laneCtx = laneCanvas.getContext('2d');
     laneCanvas.addEventListener('click', (e) => this.onLaneClick(e));
-    if (!this._laneResize) {
-      this._laneResize = () => { this.resizeLaneCanvas(); this.drawLanes(); };
-      window.addEventListener('resize', this._laneResize);
-    }
   },
   resizeLaneCanvas() {
     if (!laneCanvas) return;
@@ -924,17 +942,13 @@ Alpine.data('choreo', () => ({
     laneCanvas.height = Math.max(1, Math.round(h * dpr));
     if (laneCtx) laneCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   },
-  scheduleLaneDraw() {
-    if (laneRaf) return;
-    laneRaf = requestAnimationFrame(() => { laneRaf = 0; this.drawLanes(); });
-  },
   footColor(foot) { return foot === 'R' ? '#ff5a5a' : (foot === 'L' ? '#6c8cff' : '#cccccc'); },
 
-  drawLanes() {
+  drawLanes(vp) {
     if (!laneCtx || !laneCanvas) return;
+    if (vp === undefined) vp = this.gridViewport();
     const w = laneCanvas.clientWidth, h = laneCanvas.clientHeight;
     laneCtx.clearRect(0, 0, w, h);
-    const vp = this.gridViewport();
     if (!vp) return;
     const { startT, pxPerSec } = vp;
     const endT = startT + w / pxPerSec;
@@ -982,13 +996,15 @@ Alpine.data('choreo', () => ({
     laneCtx.textAlign = 'center';
     laneCtx.textBaseline = 'middle';
     laneCtx.font = 'bold 13px -apple-system, sans-serif';
-    for (const st of this.visibleStepsFor(role)) {
+    for (const ent of this.laneEntries(role)) {
+      const st = ent.s;
       const sec = this.tempoSections.find(x => x.id === st.tempo_section_id);
       if (!sec) continue;
       const spb = 60 / (Number(sec.bpm) || 120);
       const t = Number(sec.offset_sec || 0) + Number(st.beat_pos) * spb;
       if (t < startT - spb || t > endT + spb) continue;
       const x = (t - startT) * pxPerSec;
+      laneCtx.globalAlpha = ent.dim ? 0.3 : 1;
       const col = this.footColor(st.foot);
       if (this.stepDisplay === 'dots') {
         const len = Number(st.length_beats) || 1;
@@ -1008,6 +1024,7 @@ Alpine.data('choreo', () => ({
         laneCtx.fillText(label, x, cy);
       }
     }
+    laneCtx.globalAlpha = 1;
   },
   roundRect(x, y, w, h, r) {
     laneCtx.beginPath();
@@ -1025,11 +1042,11 @@ Alpine.data('choreo', () => ({
     const rect = laneCanvas.getBoundingClientRect();
     const x = e.clientX - rect.left, y = e.clientY - rect.top;
     const time = vp.startT + x / vp.pxPerSec;
-    if (this.bottomTab === 'steps' && this.isEditor) {
+    if (this.currentMode === 'editor' && this.bottomTab === 'steps') {
       this.editRole = y < rect.height / 2 ? 'herren' : 'damen';
       this.placeStepAtTime(this.editRole, time);
     } else if (ws) {
-      ws.setTime(Math.max(0, time));   // sonst: Springen wie auf der Welle
+      ws.setTime(Math.max(0, time));   // sonst: Springen wie auf der Welle (auch eingeloggt im Training)
     }
   },
   nextFoot(role) {
@@ -1038,7 +1055,7 @@ Alpine.data('choreo', () => ({
     return lastFoot[role] === 'L' ? 'R' : 'L';   // auto: abwechselnd
   },
   placeStepAtTime(role, time) {
-    if (!this.project) return;
+    if (!this.project || this.currentMode !== 'editor') return;   // nur im Editor-Modus
     const sec = this.sectionAt(time);
     if (!sec) { this.setStatus('Hier ist kein Tempo-Abschnitt'); return; }
     const spb = 60 / (Number(sec.bpm) || 120);
@@ -1141,8 +1158,8 @@ Alpine.data('choreo', () => ({
 
   destroyWs() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-    if (gridRaf) { cancelAnimationFrame(gridRaf); gridRaf = 0; }
-    if (laneRaf) { cancelAnimationFrame(laneRaf); laneRaf = 0; }
+    if (drawRaf) { cancelAnimationFrame(drawRaf); drawRaf = 0; }
+    cachedPxPerSec = 0;
     if (ws) { try { ws.destroy(); } catch (e) {} ws = null; wsRegions = null; }
     if (gridCanvas) { try { gridCanvas.remove(); } catch (e) {} gridCanvas = null; gridCtx = null; }
     if (laneCanvas) { try { laneCanvas.remove(); } catch (e) {} laneCanvas = null; laneCtx = null; }

@@ -148,17 +148,6 @@
 
         <template x-if="isEditor">
           <div>
-            <div class="section-title">Personen</div>
-            <template x-for="p in sortedPersons" :key="p.id">
-              <div class="person-row">
-                <span class="person-num" x-text="p.number"></span>
-                <input type="text" :value="p.name || ''" placeholder="Name (optional)" @input="renamePerson(p, $event.target.value)" />
-                <button class="icon danger" @click="removePerson(p)" aria-label="Person löschen">🗑</button>
-              </div>
-            </template>
-            <template x-if="!sortedPersons.length"><p class="hint">Noch keine Personen.</p></template>
-            <button class="primary" style="width:100%;margin:4px 0 18px" @click="addPerson()">＋ Person</button>
-
             <div class="section-title">Abschnitte &amp; Gruppen</div>
             <p class="hint">Pro Abschnitt jeder Person eine Gruppe geben (Tippen schaltet weiter: – ▸ 1 ▸ 2 …). „–" = keine Gruppe / alle gleich.</p>
             <template x-for="part in sortedParts" :key="part.id">
@@ -194,6 +183,17 @@
               </div>
             </template>
             <button class="primary" style="width:100%;margin-top:4px" @click="addPart()">＋ Abschnitt</button>
+
+            <div class="section-title" style="margin-top:18px">Personen</div>
+            <template x-for="p in sortedPersons" :key="p.id">
+              <div class="person-row">
+                <span class="person-num" x-text="p.number"></span>
+                <input type="text" :value="p.name || ''" placeholder="Name (optional)" @input="renamePerson(p, $event.target.value)" />
+                <button class="icon danger" @click="removePerson(p)" aria-label="Person löschen">🗑</button>
+              </div>
+            </template>
+            <template x-if="!sortedPersons.length"><p class="hint">Noch keine Personen.</p></template>
+            <button class="primary" style="width:100%;margin:4px 0 4px" @click="addPerson()">＋ Person</button>
           </div>
         </template>
       </div>
@@ -213,8 +213,11 @@
         <template x-if="!isEditor">
           <p class="empty">Zum Eintragen von Schritten als Editor anmelden.</p>
         </template>
+        <template x-if="isEditor && currentMode !== 'editor'">
+          <p class="empty">Oben in den <strong>Editor-Modus</strong> wechseln, um Schritte einzutragen.</p>
+        </template>
 
-        <template x-if="isEditor">
+        <template x-if="currentMode === 'editor'">
           <div>
             <div class="section-title">Schritte eintragen</div>
 
