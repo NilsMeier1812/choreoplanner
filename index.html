@@ -26,12 +26,12 @@
         </template>
       </div>
       <span x-show="!online" class="badge offline">offline</span>
-      <button class="icon" x-show="project" @click="openSettings()" aria-label="Projekt-Einstellungen">⚙️</button>
+      <button class="icon" x-show="project && isEditor" @click="openSettings()" aria-label="Projekt-Einstellungen">⚙️</button>
       <div class="mode-toggle" x-show="project">
         <button :class="{ active: currentMode === 'training' }"
                 @click="currentMode === 'editor' && toggleMode()">Training</button>
         <button :class="{ active: currentMode === 'editor' }"
-                @click="currentMode === 'training' && toggleMode()">Editor</button>
+                @click="currentMode === 'training' && toggleMode()">Editor<span x-show="!isEditor"> 🔒</span></button>
       </div>
     </div>
 
@@ -115,19 +115,30 @@
           <button class="icon" @click="menuOpen = false" aria-label="Schließen">✕</button>
         </header>
         <div class="body">
+          <!-- Editor-Status / Login -->
+          <div class="editor-bar">
+            <template x-if="isEditor">
+              <div class="eb-row"><span class="eb-on">✏️ Editor aktiv</span><button @click="logout()">Abmelden</button></div>
+            </template>
+            <template x-if="!isEditor">
+              <div class="eb-row"><span class="eb-off">🔒 Nur Lesen</span><button class="primary" @click="openLogin()">Editor anmelden</button></div>
+            </template>
+          </div>
+
           <template x-for="p in projects" :key="p.id">
             <div class="project-item" :class="{ active: project && p.id === project.id }" @click="openProject(p)">
               <div class="pi-main">
                 <div class="pi-title" x-text="p.title"></div>
                 <div class="pi-meta" x-text="`${p.bpm} BPM · ${p.time_signature}`"></div>
               </div>
-              <button class="icon danger" @click.stop="confirmDeleteProject(p)" aria-label="Projekt löschen">🗑</button>
+              <button x-show="isEditor" class="icon danger" @click.stop="confirmDeleteProject(p)" aria-label="Projekt löschen">🗑</button>
             </div>
           </template>
           <template x-if="projects.length === 0">
             <div class="empty" style="padding:20px 0" x-text="online ? 'Noch keine Projekte.' : 'Offline – keine zwischengespeicherten Projekte.'"></div>
           </template>
 
+          <template x-if="isEditor"><div>
           <div class="section-title">Neues Projekt</div>
           <div class="field">
             <label>Titel</label>
@@ -172,6 +183,7 @@
                   :disabled="uploading || !form.title || !form.file || !online"
                   @click="createProject()"
                   x-text="online ? 'Projekt anlegen & hochladen' : 'Offline – Anlegen nicht möglich'"></button>
+          </div></template>
         </div>
         <div class="drawer-foot">v<span x-text="version"></span></div>
       </aside>
@@ -255,6 +267,25 @@
           </p>
           <input type="text" x-model="nameInput" placeholder="Dein Name" @keydown.enter="saveName()" />
           <button class="primary" style="width:100%;margin-top:12px" :disabled="!nameInput.trim()" @click="saveName()">Los geht's</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ===== Editor-Login ===== -->
+  <template x-if="loginOpen">
+    <div>
+      <div class="scrim" @click="closeLogin()"></div>
+      <div class="modal">
+        <header><h2>Editor anmelden 🔒</h2><button class="icon" @click="closeLogin()" aria-label="Schließen">✕</button></header>
+        <div class="body">
+          <p class="hint">Bearbeiten ist nur mit dem gemeinsamen Editor-Passwort möglich. Ansehen &amp; Training geht für alle ohne Login.</p>
+          <input type="password" x-model="loginPassword" placeholder="Editor-Passwort"
+                 autocomplete="current-password" @keydown.enter="doLogin()" />
+          <div x-show="loginError" style="color:var(--danger);font-size:13px;margin-top:8px" x-text="loginError"></div>
+          <button class="primary" style="width:100%;margin-top:12px"
+                  :disabled="!loginPassword || loggingIn" @click="doLogin()"
+                  x-text="loggingIn ? 'Anmelden…' : 'Anmelden'"></button>
         </div>
       </div>
     </div>

@@ -262,6 +262,17 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .project-item .pi-title { font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .project-item .pi-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+.editor-bar { margin-bottom: 14px; }
+.editor-bar .eb-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 12px;
+  background: var(--panel-2);
+}
+.editor-bar .eb-row button { margin-left: auto; }
+.eb-on { color: var(--ok); font-weight: 600; font-size: 14px; }
+.eb-off { color: var(--muted); font-weight: 600; font-size: 14px; }
+
 .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 4px 8px; }
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }

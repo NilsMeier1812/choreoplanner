@@ -12,12 +12,19 @@ import TimelinePlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/pl
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 11;
+const APP_VERSION = 12;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFna2xydmFnemZ2cWJicGdwZmRsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIxMTkyNjksImV4cCI6MjA5NzY5NTI2OX0.3Jo7IBQYHDOr1hNRzuV3zxnof0zI4lD2kF6XqT2QjIs';
+// Gemeinsamer Editor-Login: das Team teilt sich EIN Passwort. Bearbeiten nur
+// nach Login (authenticated), Lesen/Training für alle (anon).
+const EDITOR_EMAIL = 'editor@choreo.app';
 const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// Token für Roh-fetch/XHR-Schreibzugriffe. Default = anon (nur Lesen); nach
+// Login wird hier das JWT des eingeloggten Editors hinterlegt (sonst blockt RLS).
+let accessToken = SUPABASE_ANON_KEY;
 
 const LOCK_TIMEOUT_MS = 30000;     // Zombie-Lock-Schwelle
 const HEARTBEAT_MS = 15000;        // Lock-Refresh-Intervall
@@ -58,7 +65,7 @@ function uuid() {
 }
 const restHeaders = () => ({
   apikey: SUPABASE_ANON_KEY,
-  Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+  Authorization: `Bearer ${accessToken}`,
   'Content-Type': 'application/json'
 });
 
@@ -76,6 +83,14 @@ Alpine.data('choreo', () => ({
   version: APP_VERSION,
   menuOpen: false,
   settingsOpen: false,
+
+  /* --- Auth / Editor-Freischaltung --- */
+  isEditor: false,
+  loginOpen: false,
+  loginPassword: '',
+  loginError: '',
+  loggingIn: false,
+
   online: navigator.onLine,
   toast: '',
   _toastTimer: null,
@@ -124,6 +139,9 @@ Alpine.data('choreo', () => ({
   /* ===================== Init ===================== */
   async init() {
     app = this;
+
+    // Auth-Session wiederherstellen (gemeinsamer Editor-Login)
+    await this.initAuth();
 
     // Identität
     this.userId = localStorage.getItem('choreo_user_id') || (() => {
@@ -182,6 +200,51 @@ Alpine.data('choreo', () => ({
     this.userName = n;
     localStorage.setItem('choreo_user_name', n);
     this.nameModalOpen = false;
+  },
+
+  /* ===================== Auth / Editor-Login ===================== */
+  async initAuth() {
+    try {
+      const { data } = await sb.auth.getSession();
+      const session = data && data.session;
+      this.isEditor = !!session;
+      accessToken = (session && session.access_token) || SUPABASE_ANON_KEY;
+    } catch (e) { /* offline o.ä. -> bleibt Lese-Modus */ }
+    // hält Token & Editor-Status aktuell (Login, Logout, Token-Refresh)
+    sb.auth.onAuthStateChange((_event, session) => {
+      this.isEditor = !!session;
+      accessToken = (session && session.access_token) || SUPABASE_ANON_KEY;
+    });
+  },
+
+  openLogin() { this.loginError = ''; this.loginPassword = ''; this.loginOpen = true; },
+  closeLogin() { this.loginOpen = false; },
+
+  async doLogin() {
+    const pw = this.loginPassword;
+    if (!pw || this.loggingIn) return;
+    this.loggingIn = true; this.loginError = '';
+    try {
+      const { error } = await sb.auth.signInWithPassword({ email: EDITOR_EMAIL, password: pw });
+      if (error) throw error;
+      this.loginPassword = '';
+      this.loginOpen = false;
+      this.setStatus('Editor-Modus freigeschaltet');
+      // direkt in den Editor wechseln, wenn ein Projekt offen ist
+      if (this.project && this.currentMode === 'training') await this.enterEditor();
+    } catch (e) {
+      this.loginError = 'Passwort falsch (oder offline). Bitte erneut versuchen.';
+    } finally {
+      this.loggingIn = false;
+    }
+  },
+
+  async logout() {
+    if (this.currentMode === 'editor') await this.exitEditor();
+    try { await sb.auth.signOut(); } catch (e) {}
+    this.isEditor = false;
+    accessToken = SUPABASE_ANON_KEY;
+    this.setStatus('Abgemeldet – nur noch Lesen/Training');
   },
 
   /* ===================== Projekte ===================== */
@@ -382,7 +445,11 @@ Alpine.data('choreo', () => ({
   },
 
   /* ===================== Projekt-Einstellungen / Kalibrierung ===================== */
-  openSettings() { if (this.project) this.settingsOpen = true; },
+  openSettings() {
+    if (!this.project) return;
+    if (!this.isEditor) { this.openLogin(); return; }
+    this.settingsOpen = true;
+  },
   closeSettings() { this.settingsOpen = false; },
 
   setTimeSig(v) {
@@ -641,8 +708,12 @@ Alpine.data('choreo', () => ({
   /* ===================== Heartbeat-Locking ===================== */
   async toggleMode() {
     if (!this.project) return;
-    if (this.currentMode === 'training') await this.enterEditor();
-    else await this.exitEditor();
+    if (this.currentMode === 'training') {
+      if (!this.isEditor) { this.openLogin(); return; }   // Bearbeiten nur mit Login
+      await this.enterEditor();
+    } else {
+      await this.exitEditor();
+    }
   },
 
   async enterEditor() {
@@ -806,7 +877,7 @@ Alpine.data('choreo', () => ({
       const xhr = new XMLHttpRequest();
       this._xhr = xhr;
       xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${STORAGE_BUCKET}/${path}`);
-      xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_ANON_KEY}`);
+      xhr.setRequestHeader('Authorization', `Bearer ${accessToken}`);  // JWT des Editors (RLS)
       xhr.setRequestHeader('apikey', SUPABASE_ANON_KEY);
       xhr.setRequestHeader('x-upsert', 'true');
       xhr.setRequestHeader('cache-control', '3600');
