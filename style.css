@@ -60,15 +60,28 @@ input, select, textarea {
 textarea { resize: none; line-height: 1.4; }
 input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
 
-/* ===== Audio-Bereich (oberes Drittel) ===== */
+/* ===== Audio-Bereich (oben) ===== */
 #audio-section {
-  height: 33.33dvh;
+  height: 44dvh;
   flex-shrink: 0;
   background: var(--panel);
   border-bottom: 2px solid var(--border);
   display: flex;
   flex-direction: column;
 }
+
+/* mitlaufende Schritt-Lanes (Herren/Damen) */
+#lanes {
+  position: relative;
+  flex-shrink: 0;
+  height: 76px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-2);
+}
+.lane-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.lane-label { position: absolute; left: 5px; font-size: 13px; color: var(--muted); pointer-events: none; z-index: 2; }
+.lane-h { top: 3px; }
+.lane-d { top: 50%; margin-top: 4px; }
 
 .topbar {
   height: 44px;
@@ -222,6 +235,19 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .grp-chip.g6 { border-color: #5ad1e6; background: rgba(90,209,230,.16); }
 .grp-chip.g7 { border-color: #ff9a5a; background: rgba(255,154,90,.16); }
 .grp-chip.g8 { border-color: #9aa0b0; background: rgba(154,160,176,.16); }
+
+/* Schritt-Liste (Editor) */
+.step-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.step-row .ts {
+  font-variant-numeric: tabular-nums; font-size: 12px;
+  background: var(--accent-dim); color: var(--accent);
+  border: none; padding: 5px 9px; border-radius: 8px;
+}
+.foot-chip { width: 32px; height: 32px; padding: 0; border-radius: 8px; font-weight: 700; font-size: 13px; border: 1px solid var(--border); flex-shrink: 0; }
+.foot-chip.foot-l { color: #6c8cff; border-color: #3a4a8a; background: rgba(108,140,255,.14); }
+.foot-chip.foot-r { color: #ff5a5a; border-color: #5a2b2b; background: rgba(255,90,90,.14); }
+.step-val { min-width: 22px; text-align: center; font-weight: 700; color: var(--muted); }
+.step-row .icon { margin-left: auto; }
 .notes-head { display: flex; align-items: center; gap: 8px; margin: 2px 4px 10px; }
 .notes-head h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0; flex: 1; }
 .empty { color: var(--muted); text-align: center; padding: 40px 16px; font-size: 14px; }

@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 14;
+const APP_VERSION = 15;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -57,6 +57,10 @@ let wsRegions = null;
 let gridCanvas = null;             // eigenes Beat-Grid (Overlay über dem Waveform)
 let gridCtx = null;
 let gridRaf = 0;                   // requestAnimationFrame-Drossel fürs Neuzeichnen
+let laneCanvas = null;             // Schritt-Lanes (Herren/Damen) unter der Welle
+let laneCtx = null;
+let laneRaf = 0;
+const lastFoot = { herren: null, damen: null };  // für Auto-Fußwechsel beim Eintragen
 let app = null;                    // Referenz auf die Alpine-Komponente
 let heartbeatTimer = null;
 let currentObjectUrl = null;
@@ -122,6 +126,13 @@ Alpine.data('choreo', () => ({
   memberships: [],                  // Gruppen-Zuteilungen (part_id, person_number, group_number)
   myPersonNumber: 0,                // "Ich bin Person X" (0 = niemand)
   bottomTab: 'notes',               // 'notes' | 'groups' | 'steps'
+  steps: [],                        // Schritte (Herren/Damen, an Beats geklebt)
+  stepDisplay: 'dots',              // 'dots' | 'letters' | 'numbers'
+  editRole: 'herren',               // welche Lane wird gerade bearbeitet
+  editGroup: 0,                     // Schritte gehören zu dieser Gruppe (0 = alle)
+  editFoot: 'auto',                 // 'auto' | 'L' | 'R'
+  editValue: 'S',                   // 'S' (1 Beat) | 'L' (2 Beats) | 'U' (Offbeat „und")
+  editSnap: 'beat',                 // 'beat' | 'half'
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -173,14 +184,22 @@ Alpine.data('choreo', () => ({
   },
   get sortedPersons() { return [...this.persons].sort((a, b) => Number(a.number) - Number(b.number)); },
   get sortedParts() { return [...this.parts].sort((a, b) => Number(a.start_sec) - Number(b.start_sec)); },
-  // Gruppen-Abschnitt an der aktuellen Abspielposition
-  get activePart() {
-    const t = this.currentTime;
+  // Gruppen-Abschnitt an einer Zeit (bzw. an der aktuellen Position)
+  partAt(t) {
     for (const p of this.sortedParts) {
       const e = p.end_sec == null ? Infinity : Number(p.end_sec);
       if (t >= Number(p.start_sec) - 1e-6 && t < e) return p;
     }
     return null;
+  },
+  get activePart() { return this.partAt(this.currentTime); },
+  // Tempo-Abschnitt an einer Zeit
+  sectionAt(t) {
+    for (const s of this.sortedTempo) {
+      const e = s.end_sec == null ? Infinity : Number(s.end_sec);
+      if (t >= Number(s.start_sec) - 1e-6 && t < e) return s;
+    }
+    return this.sortedTempo[0] || null;
   },
   // Gruppe einer Person in einem Abschnitt (0 = keine/„alle gleich")
   groupOf(part, personNumber) {
@@ -338,6 +357,7 @@ Alpine.data('choreo', () => ({
     await this.loadTempoSections(p.id);
     await this.loadPersons(p.id);
     await this.loadParts(p.id);
+    await this.loadSteps(p.id);
     this.myPersonNumber = Number(localStorage.getItem('choreo_person_' + p.id)) || 0;
     if (token !== loadToken) return;      // anderes Projekt wurde inzwischen gewählt
     this.createWs(p);
@@ -423,7 +443,9 @@ Alpine.data('choreo', () => ({
     if (ws) this.duration = ws.getDuration();
     this.renderRegions();
     this.resizeGridCanvas();
+    this.resizeLaneCanvas();
     this.scheduleGridDraw();
+    this.scheduleLaneDraw();
   },
 
   handleAudioError(err) {
@@ -467,8 +489,9 @@ Alpine.data('choreo', () => ({
     });
     wsRegions = ws.registerPlugin(RegionsPlugin.create());
 
-    // eigenes Beat-Grid als Overlay-Canvas (Multi-Tempo)
+    // eigenes Beat-Grid als Overlay-Canvas (Multi-Tempo) + Schritt-Lanes
     this.setupGridCanvas(container);
+    this.setupLaneCanvas(document.getElementById('lanes'));
 
     // 'ready'/'decode' sind die verlässlichen Signale (das load()-Promise kann hängen)
     ws.on('ready', () => this.onAudioReady());
@@ -476,12 +499,12 @@ Alpine.data('choreo', () => ({
     ws.on('play', () => { this.isPlaying = true; });
     ws.on('pause', () => { this.isPlaying = false; });
     ws.on('finish', () => { this.isPlaying = false; });
-    ws.on('timeupdate', (t) => this.onTimeUpdate(t));
+    ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.scheduleLaneDraw(); });
     ws.on('error', (err) => this.handleAudioError(err));
-    // Grid an Scroll/Zoom/Redraw von Wavesurfer koppeln
-    ws.on('scroll', () => this.scheduleGridDraw());
-    ws.on('zoom', () => this.scheduleGridDraw());
-    ws.on('redraw', () => this.scheduleGridDraw());
+    // Grid + Lanes an Scroll/Zoom/Redraw von Wavesurfer koppeln
+    ws.on('scroll', () => { this.scheduleGridDraw(); this.scheduleLaneDraw(); });
+    ws.on('zoom', () => { this.scheduleGridDraw(); this.scheduleLaneDraw(); });
+    ws.on('redraw', () => { this.scheduleGridDraw(); this.scheduleLaneDraw(); });
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
@@ -750,6 +773,7 @@ Alpine.data('choreo', () => ({
   setMyPerson(n) {
     this.myPersonNumber = Number(n) || 0;
     if (this.project) localStorage.setItem('choreo_person_' + this.project.id, this.myPersonNumber);
+    this.scheduleLaneDraw();
   },
 
   /* ===================== Gruppen-Abschnitte (parts) ===================== */
@@ -846,6 +870,241 @@ Alpine.data('choreo', () => ({
     }
   },
 
+  /* ===================== Schritte: Daten + Filter ===================== */
+  async loadSteps(pid) {
+    try {
+      const { data, error } = await sb.from('steps').select('*').eq('project_id', pid);
+      if (error) throw error;
+      this.steps = data || [];
+      await db.steps.where('project_id').equals(pid).delete().catch(() => {});
+      await db.steps.bulkPut(this.steps).catch(() => {});
+    } catch (e) {
+      this.steps = await db.steps.where('project_id').equals(pid).toArray().catch(() => []);
+    }
+  },
+  // Absolute Zeit eines Schritts (Beat -> Sekunde über seinen Tempo-Abschnitt)
+  stepTime(s) {
+    const sec = this.tempoSections.find(x => x.id === s.tempo_section_id);
+    if (!sec) return null;
+    return Number(sec.offset_sec || 0) + Number(s.beat_pos) * (60 / (Number(sec.bpm) || 120));
+  },
+  isOffbeat(s) { const b = Number(s.beat_pos); return Math.abs(b - Math.round(b)) > 0.1; },
+  // Welche Schritte einer Rolle sichtbar sind (Editier- vs. Trainingsfilter)
+  visibleStepsFor(role) {
+    const editing = this.bottomTab === 'steps' && this.isEditor;
+    return this.steps.filter(s => {
+      if (s.role !== role) return false;
+      if (editing) return Number(s.group_number) === Number(this.editGroup);
+      if (Number(s.group_number) === 0) return true;       // „alle"
+      if (!this.myPersonNumber) return false;              // niemand gewählt -> nur „alle"
+      const t = this.stepTime(s); if (t == null) return false;
+      return Number(s.group_number) === this.groupOf(this.partAt(t), this.myPersonNumber);
+    });
+  },
+
+  /* ===================== Schritt-Lanes (Canvas) ===================== */
+  setupLaneCanvas(container) {
+    if (!container) return;
+    if (laneCanvas) { try { laneCanvas.remove(); } catch (e) {} }
+    laneCanvas = document.createElement('canvas');
+    laneCanvas.className = 'lane-canvas';
+    container.appendChild(laneCanvas);
+    laneCtx = laneCanvas.getContext('2d');
+    laneCanvas.addEventListener('click', (e) => this.onLaneClick(e));
+    if (!this._laneResize) {
+      this._laneResize = () => { this.resizeLaneCanvas(); this.drawLanes(); };
+      window.addEventListener('resize', this._laneResize);
+    }
+  },
+  resizeLaneCanvas() {
+    if (!laneCanvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = laneCanvas.clientWidth, h = laneCanvas.clientHeight;
+    laneCanvas.width = Math.max(1, Math.round(w * dpr));
+    laneCanvas.height = Math.max(1, Math.round(h * dpr));
+    if (laneCtx) laneCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  },
+  scheduleLaneDraw() {
+    if (laneRaf) return;
+    laneRaf = requestAnimationFrame(() => { laneRaf = 0; this.drawLanes(); });
+  },
+  footColor(foot) { return foot === 'R' ? '#ff5a5a' : (foot === 'L' ? '#6c8cff' : '#cccccc'); },
+
+  drawLanes() {
+    if (!laneCtx || !laneCanvas) return;
+    const w = laneCanvas.clientWidth, h = laneCanvas.clientHeight;
+    laneCtx.clearRect(0, 0, w, h);
+    const vp = this.gridViewport();
+    if (!vp) return;
+    const { startT, pxPerSec } = vp;
+    const endT = startT + w / pxPerSec;
+    const dur = ws.getDuration() || 0;
+    const laneH = h / 2;
+
+    // schwache Taktlinien zur Ausrichtung mit der Welle
+    laneCtx.strokeStyle = 'rgba(150,160,180,0.18)';
+    laneCtx.lineWidth = 1;
+    for (const sec of this.sortedTempo) {
+      const bpm = Number(sec.bpm) || 120, spb = 60 / bpm;
+      if (spb <= 0) continue;
+      const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
+      const off = Number(sec.offset_sec) || 0;
+      const sStart = Number(sec.start_sec) || 0;
+      const sEnd = sec.end_sec == null ? dur : Number(sec.end_sec);
+      if (spb * bpb * pxPerSec < 10) continue;
+      let k = Math.ceil((Math.max(sStart, startT) - off) / spb - 1e-6);
+      for (; ; k++) {
+        const t = off + k * spb;
+        if (t > Math.min(sEnd, endT) + 1e-6) break;
+        if (t < sStart - 1e-6) continue;
+        if ((((k % bpb) + bpb) % bpb) !== 0) continue;   // nur Taktanfänge
+        const x = Math.round((t - startT) * pxPerSec) + 0.5;
+        laneCtx.beginPath(); laneCtx.moveTo(x, 0); laneCtx.lineTo(x, h); laneCtx.stroke();
+      }
+    }
+
+    // Trennlinie zwischen Herren/Damen
+    laneCtx.strokeStyle = 'rgba(255,255,255,0.10)';
+    laneCtx.beginPath(); laneCtx.moveTo(0, laneH + 0.5); laneCtx.lineTo(w, laneH + 0.5); laneCtx.stroke();
+
+    this.drawLaneSteps('herren', 0, laneH, startT, pxPerSec, endT);
+    this.drawLaneSteps('damen', laneH, laneH, startT, pxPerSec, endT);
+
+    // Playhead über beide Lanes
+    const px = (this.currentTime - startT) * pxPerSec;
+    if (px >= 0 && px <= w) {
+      laneCtx.strokeStyle = 'rgba(255,255,255,0.9)'; laneCtx.lineWidth = 2;
+      laneCtx.beginPath(); laneCtx.moveTo(px, 0); laneCtx.lineTo(px, h); laneCtx.stroke();
+    }
+  },
+  drawLaneSteps(role, y0, laneH, startT, pxPerSec, endT) {
+    const cy = y0 + laneH / 2;
+    laneCtx.textAlign = 'center';
+    laneCtx.textBaseline = 'middle';
+    laneCtx.font = 'bold 13px -apple-system, sans-serif';
+    for (const st of this.visibleStepsFor(role)) {
+      const sec = this.tempoSections.find(x => x.id === st.tempo_section_id);
+      if (!sec) continue;
+      const spb = 60 / (Number(sec.bpm) || 120);
+      const t = Number(sec.offset_sec || 0) + Number(st.beat_pos) * spb;
+      if (t < startT - spb || t > endT + spb) continue;
+      const x = (t - startT) * pxPerSec;
+      const col = this.footColor(st.foot);
+      if (this.stepDisplay === 'dots') {
+        const len = Number(st.length_beats) || 1;
+        laneCtx.fillStyle = col;
+        if (len >= 2) {
+          const wpx = Math.max(10, len * spb * pxPerSec - 2);
+          this.roundRect(x, cy - 5, wpx, 10, 5); laneCtx.fill();
+        } else {
+          laneCtx.beginPath(); laneCtx.arc(x, cy, this.isOffbeat(st) ? 3.5 : 5, 0, 7); laneCtx.fill();
+        }
+      } else {
+        const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
+        let label;
+        if (this.stepDisplay === 'letters') label = this.isOffbeat(st) ? 'U' : (Number(st.length_beats) >= 2 ? 'L' : 'S');
+        else { const base = Math.floor(Number(st.beat_pos) + 1e-6); label = this.isOffbeat(st) ? 'u' : String((((base % bpb) + bpb) % bpb) + 1); }
+        laneCtx.fillStyle = col;
+        laneCtx.fillText(label, x, cy);
+      }
+    }
+  },
+  roundRect(x, y, w, h, r) {
+    laneCtx.beginPath();
+    laneCtx.moveTo(x + r, y);
+    laneCtx.arcTo(x + w, y, x + w, y + h, r);
+    laneCtx.arcTo(x + w, y + h, x, y + h, r);
+    laneCtx.arcTo(x, y + h, x, y, r);
+    laneCtx.arcTo(x, y, x + w, y, r);
+    laneCtx.closePath();
+  },
+
+  /* ===================== Schritte: Eingabe ===================== */
+  onLaneClick(e) {
+    const vp = this.gridViewport(); if (!vp || !laneCanvas) return;
+    const rect = laneCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left, y = e.clientY - rect.top;
+    const time = vp.startT + x / vp.pxPerSec;
+    if (this.bottomTab === 'steps' && this.isEditor) {
+      this.editRole = y < rect.height / 2 ? 'herren' : 'damen';
+      this.placeStepAtTime(this.editRole, time);
+    } else if (ws) {
+      ws.setTime(Math.max(0, time));   // sonst: Springen wie auf der Welle
+    }
+  },
+  nextFoot(role) {
+    if (this.editFoot === 'L') return 'L';
+    if (this.editFoot === 'R') return 'R';
+    return lastFoot[role] === 'L' ? 'R' : 'L';   // auto: abwechselnd
+  },
+  placeStepAtTime(role, time) {
+    if (!this.project) return;
+    const sec = this.sectionAt(time);
+    if (!sec) { this.setStatus('Hier ist kein Tempo-Abschnitt'); return; }
+    const spb = 60 / (Number(sec.bpm) || 120);
+    let beat = (time - Number(sec.offset_sec || 0)) / spb;
+    const g = (this.editValue === 'U' || this.editSnap === 'half') ? 0.5 : 1;
+    beat = Math.round(beat / g) * g;
+    if (beat < 0) beat = 0;
+    const existing = this.steps.find(s => s.role === role && Number(s.group_number) === Number(this.editGroup)
+      && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25);
+    if (existing) { this.deleteStep(existing); return; }   // Tippen auf vorhandenen = entfernen
+    const foot = this.nextFoot(role);
+    const row = {
+      id: uuid(), project_id: this.project.id, tempo_section_id: sec.id,
+      role, group_number: Number(this.editGroup),
+      beat_pos: Math.round(beat * 1000) / 1000,
+      length_beats: this.editValue === 'L' ? 2 : 1,
+      foot, value: null
+    };
+    this.steps.push(row);
+    db.steps.put(row).catch(() => {});
+    lastFoot[role] = foot;
+    this.persistGeneric('steps', 'insert', row);
+    this.scheduleLaneDraw();
+  },
+  tapStep() { if (ws) this.placeStepAtTime(this.editRole, ws.getCurrentTime()); },
+  deleteStep(s) {
+    this.steps = this.steps.filter(x => x.id !== s.id);
+    db.steps.delete(s.id).catch(() => {});
+    this.persistGeneric('steps', 'delete', s);
+    this.scheduleLaneDraw();
+  },
+  clearSteps() {
+    const toDel = this.steps.filter(s => s.role === this.editRole && Number(s.group_number) === Number(this.editGroup));
+    if (!toDel.length) { this.setStatus('Keine Schritte in dieser Auswahl'); return; }
+    if (!confirm(`Alle ${toDel.length} ${this.editRole === 'herren' ? 'Herren' : 'Damen'}-Schritte (Gruppe ${this.editGroup}) löschen?`)) return;
+    const ids = new Set(toDel.map(s => s.id));
+    this.steps = this.steps.filter(s => !ids.has(s.id));
+    for (const s of toDel) { db.steps.delete(s.id).catch(() => {}); this.persistGeneric('steps', 'delete', s); }
+    this.scheduleLaneDraw();
+  },
+  // Liste der Schritte der aktuellen Editier-Auswahl, nach Zeit sortiert
+  get editSteps() {
+    return this.steps
+      .filter(s => s.role === this.editRole && Number(s.group_number) === Number(this.editGroup))
+      .map(s => ({ s, t: this.stepTime(s) }))
+      .filter(o => o.t != null)
+      .sort((a, b) => a.t - b.t);
+  },
+  toggleStepFoot(s) {
+    const f = s.foot === 'R' ? 'L' : 'R';
+    s.foot = f;
+    db.steps.put(JSON.parse(JSON.stringify(s))).catch(() => {});
+    this.debouncedUpdate('steps', s.id, { foot: f });
+    this.scheduleLaneDraw();
+  },
+  setTab(t) { this.bottomTab = t; this.scheduleLaneDraw(); },
+  setEditRole(r) { this.editRole = r; this.scheduleLaneDraw(); },
+  nudgeEditGroup(d) { this.editGroup = Math.max(0, Math.min(this.GROUP_MAX, Number(this.editGroup) + d)); this.scheduleLaneDraw(); },
+  setStepDisplay(m) { this.stepDisplay = m; this.scheduleLaneDraw(); },
+  cycleStepDisplay() {
+    const order = ['dots', 'letters', 'numbers'];
+    this.stepDisplay = order[(order.indexOf(this.stepDisplay) + 1) % order.length];
+    this.scheduleLaneDraw();
+  },
+  get stepDisplayIcon() { return this.stepDisplay === 'dots' ? '●' : (this.stepDisplay === 'letters' ? 'L' : '1'); },
+
   /* ===================== Projekt-Einstellungen / Kalibrierung ===================== */
   openSettings() {
     if (!this.project) return;
@@ -883,8 +1142,10 @@ Alpine.data('choreo', () => ({
   destroyWs() {
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (gridRaf) { cancelAnimationFrame(gridRaf); gridRaf = 0; }
+    if (laneRaf) { cancelAnimationFrame(laneRaf); laneRaf = 0; }
     if (ws) { try { ws.destroy(); } catch (e) {} ws = null; wsRegions = null; }
     if (gridCanvas) { try { gridCanvas.remove(); } catch (e) {} gridCanvas = null; gridCtx = null; }
+    if (laneCanvas) { try { laneCanvas.remove(); } catch (e) {} laneCanvas = null; laneCtx = null; }
     if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
   },
 
