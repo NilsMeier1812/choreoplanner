@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 17;
+const APP_VERSION = 18;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -127,13 +127,9 @@ Alpine.data('choreo', () => ({
   memberships: [],                  // Gruppen-Zuteilungen (part_id, person_number, group_number)
   myPersonNumber: 0,                // "Ich bin Person X" (0 = niemand)
   bottomTab: 'steps',               // 'steps' | 'notes'
-  steps: [],                        // Schritte (Herren/Damen, an Beats geklebt)
+  steps: [],                        // Schritte (role 'herren'/'damen') + Notizen-Spur (role 'note')
   stepDisplay: 'dots',              // 'dots' | 'letters' | 'numbers'
-  editRole: 'herren',               // welche Lane wird gerade bearbeitet
-  editGroup: 0,                     // Schritte gehören zu dieser Gruppe (0 = alle)
-  editFoot: 'auto',                 // 'auto' | 'L' | 'R'
-  editValue: 'S',                   // 'S' (1 Beat) | 'L' (2 Beats) | 'U' (Offbeat „und")
-  editSnap: 'beat',                 // 'beat' | 'half'
+  editGroup: 0,                     // neue Schritte gehören zu dieser Gruppe (0 = alle)
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -239,6 +235,12 @@ Alpine.data('choreo', () => ({
       } else {
         if (this.online) this.processSyncQueue();
         if (this.currentMode === 'editor' && this.online) this.verifyLockStillOurs();
+        // Beim Wiederkommen aus dem Hintergrund Canvas neu vermessen + zeichnen,
+        // sonst kann das Raster gegenüber der Musik verrutschen.
+        requestAnimationFrame(() => {
+          this.resizeGridCanvas(); this.resizeLaneCanvas();
+          this.recomputeViewport(); this.scheduleDraw();
+        });
       }
     });
     window.addEventListener('pagehide', () => { this.flushPending(); this.releaseLockBeacon(); });
@@ -938,7 +940,10 @@ Alpine.data('choreo', () => ({
     laneCanvas.className = 'lane-canvas';
     container.appendChild(laneCanvas);
     laneCtx = laneCanvas.getContext('2d');
-    laneCanvas.addEventListener('click', (e) => this.onLaneClick(e));
+    laneCanvas.addEventListener('pointerdown', (e) => this.onLanePointerDown(e));
+    laneCanvas.addEventListener('pointermove', (e) => this.onLanePointerMove(e));
+    laneCanvas.addEventListener('pointerup', (e) => this.onLanePointerUp(e));
+    laneCanvas.addEventListener('pointercancel', () => this.cancelLongPress());
   },
   resizeLaneCanvas() {
     if (!laneCanvas) return;
@@ -959,7 +964,7 @@ Alpine.data('choreo', () => ({
     const { startT, pxPerSec } = vp;
     const endT = startT + w / pxPerSec;
     const dur = ws.getDuration() || 0;
-    const laneH = h / 2;
+    const laneH = h / 3;   // drei Spuren: Leader / Follower / Notizen
 
     // schwache Taktlinien zur Ausrichtung mit der Welle
     laneCtx.strokeStyle = 'rgba(150,160,180,0.18)';
@@ -983,14 +988,15 @@ Alpine.data('choreo', () => ({
       }
     }
 
-    // Trennlinie zwischen Herren/Damen
+    // Trennlinien zwischen den Spuren
     laneCtx.strokeStyle = 'rgba(255,255,255,0.10)';
-    laneCtx.beginPath(); laneCtx.moveTo(0, laneH + 0.5); laneCtx.lineTo(w, laneH + 0.5); laneCtx.stroke();
+    for (let i = 1; i < 3; i++) { laneCtx.beginPath(); laneCtx.moveTo(0, laneH * i + 0.5); laneCtx.lineTo(w, laneH * i + 0.5); laneCtx.stroke(); }
 
     this.drawLaneSteps('herren', 0, laneH, startT, pxPerSec, endT);
     this.drawLaneSteps('damen', laneH, laneH, startT, pxPerSec, endT);
+    this.drawNoteLane(2 * laneH, laneH, startT, pxPerSec, endT);
 
-    // Playhead über beide Lanes
+    // Playhead über alle Spuren
     const px = (this.currentTime - startT) * pxPerSec;
     if (px >= 0 && px <= w) {
       laneCtx.strokeStyle = 'rgba(255,255,255,0.9)'; laneCtx.lineWidth = 2;
@@ -1013,14 +1019,10 @@ Alpine.data('choreo', () => ({
       laneCtx.globalAlpha = ent.dim ? 0.3 : 1;
       const col = this.footColor(st.foot);
       if (this.stepDisplay === 'dots') {
-        const len = Number(st.length_beats) || 1;
+        // lange Schritte einfach als (etwas größerer) Punkt – keine Pille
+        const r = this.isOffbeat(st) ? 3.5 : (Number(st.length_beats) >= 2 ? 6.5 : 5);
         laneCtx.fillStyle = col;
-        if (len >= 2) {
-          const wpx = Math.max(10, len * spb * pxPerSec - 2);
-          this.roundRect(x, cy - 5, wpx, 10, 5); laneCtx.fill();
-        } else {
-          laneCtx.beginPath(); laneCtx.arc(x, cy, this.isOffbeat(st) ? 3.5 : 5, 0, 7); laneCtx.fill();
-        }
+        laneCtx.beginPath(); laneCtx.arc(x, cy, r, 0, 7); laneCtx.fill();
       } else {
         const bpb = parseInt(String(sec.time_signature || '4/4').split('/')[0], 10) || 4;
         let label;
@@ -1032,61 +1034,108 @@ Alpine.data('choreo', () => ({
     }
     laneCtx.globalAlpha = 1;
   },
-  roundRect(x, y, w, h, r) {
-    laneCtx.beginPath();
-    laneCtx.moveTo(x + r, y);
-    laneCtx.arcTo(x + w, y, x + w, y + h, r);
-    laneCtx.arcTo(x + w, y + h, x, y + h, r);
-    laneCtx.arcTo(x, y + h, x, y, r);
-    laneCtx.arcTo(x, y, x + w, y, r);
-    laneCtx.closePath();
-  },
-
-  /* ===================== Schritte: Eingabe ===================== */
-  onLaneClick(e) {
-    const vp = this.gridViewport(); if (!vp || !laneCanvas) return;
-    const rect = laneCanvas.getBoundingClientRect();
-    const x = e.clientX - rect.left, y = e.clientY - rect.top;
-    const time = vp.startT + x / vp.pxPerSec;
-    if (this.currentMode === 'editor' && this.bottomTab === 'steps') {
-      this.editRole = y < rect.height / 2 ? 'herren' : 'damen';
-      this.placeStepAtTime(this.editRole, time);
-    } else if (ws) {
-      ws.setTime(Math.max(0, time));   // sonst: Springen wie auf der Welle (auch eingeloggt im Training)
+  // Notizen-Spur: Punkt auf dem Beat + Wort; Wort blendet beim Rauszoomen aus
+  drawNoteLane(y0, laneH, startT, pxPerSec, endT) {
+    const cy = y0 + laneH / 2;
+    laneCtx.textAlign = 'left';
+    laneCtx.textBaseline = 'middle';
+    laneCtx.font = '12px -apple-system, sans-serif';
+    const showText = pxPerSec >= 30;
+    for (const st of this.steps) {
+      if (st.role !== 'note') continue;
+      const sec = this.tempoSections.find(x => x.id === st.tempo_section_id);
+      if (!sec) continue;
+      const spb = 60 / (Number(sec.bpm) || 120);
+      const t = Number(sec.offset_sec || 0) + Number(st.beat_pos) * spb;
+      if (t < startT - spb || t > endT + spb) continue;
+      const x = (t - startT) * pxPerSec;
+      laneCtx.fillStyle = '#ffcf6a';
+      laneCtx.beginPath(); laneCtx.arc(x, cy, 4, 0, 7); laneCtx.fill();
+      if (showText && st.value) { laneCtx.fillStyle = '#e8e8e8'; laneCtx.fillText(st.value, x + 7, cy); }
     }
   },
-  nextFoot(role) {
-    if (this.editFoot === 'L') return 'L';
-    if (this.editFoot === 'R') return 'R';
-    return lastFoot[role] === 'L' ? 'R' : 'L';   // auto: abwechselnd
+
+  /* ===================== Lanes: Tippen / Halten ===================== */
+  laneZoneRole(y, rectH) {
+    const z = Math.floor(y / (rectH / 3));
+    return z <= 0 ? 'herren' : (z === 1 ? 'damen' : 'note');
   },
-  placeStepAtTime(role, time) {
-    if (!this.project || this.currentMode !== 'editor') return;   // nur im Editor-Modus
+  onLanePointerDown(e) {
+    if (!laneCanvas) return;
+    const vp = this.gridViewport(); if (!vp) return;
+    const rect = laneCanvas.getBoundingClientRect();
+    this._downX = e.clientX; this._downY = e.clientY;
+    this._lpHandled = false; this._lpMoved = false;
+    this._lpRole = this.laneZoneRole(e.clientY - rect.top, rect.height);
+    this._lpTime = vp.startT + (e.clientX - rect.left) / vp.pxPerSec;
+    // Lang-Halten in den Schritt-Spuren = langer Schritt
+    if (this.currentMode === 'editor' && this.bottomTab === 'steps' && this._lpRole !== 'note') {
+      this.cancelLongPress();
+      this._lpTimer = setTimeout(() => {
+        this._lpTimer = null; this._lpHandled = true;
+        this.placeStepAtTime(this._lpRole, this._lpTime, true);
+        if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) {} }
+      }, 380);
+    }
+  },
+  onLanePointerMove(e) {
+    if (Math.abs(e.clientX - this._downX) > 8 || Math.abs(e.clientY - this._downY) > 8) {
+      this._lpMoved = true; this.cancelLongPress();
+    }
+  },
+  cancelLongPress() { if (this._lpTimer) { clearTimeout(this._lpTimer); this._lpTimer = null; } },
+  onLanePointerUp() {
+    this.cancelLongPress();
+    if (this._lpHandled) { this._lpHandled = false; return; }   // Lang-Press hat schon gesetzt
+    if (this._lpMoved) return;
+    const editing = this.currentMode === 'editor' && this.bottomTab === 'steps';
+    if (editing && this._lpRole === 'note') { this.placeNoteAtTime(this._lpTime); return; }
+    if (editing) { this.placeStepAtTime(this._lpRole, this._lpTime, false); return; }
+    if (ws) ws.setTime(Math.max(0, this._lpTime));   // Training: nur springen
+  },
+
+  /* ===================== Schritte/Notizen: Daten-Mutationen ===================== */
+  placeStepAtTime(role, time, long) {
+    if (!this.project || this.currentMode !== 'editor') return;
     const sec = this.sectionAt(time);
     if (!sec) { this.setStatus('Hier ist kein Tempo-Abschnitt'); return; }
     const spb = 60 / (Number(sec.bpm) || 120);
-    let beat = (time - Number(sec.offset_sec || 0)) / spb;
-    const g = (this.editValue === 'U' || this.editSnap === 'half') ? 0.5 : 1;
-    beat = Math.round(beat / g) * g;
+    let beat = Math.round(((time - Number(sec.offset_sec || 0)) / spb) / 0.5) * 0.5;  // immer ½-Beat
     if (beat < 0) beat = 0;
     const existing = this.steps.find(s => s.role === role && Number(s.group_number) === Number(this.editGroup)
       && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25);
-    if (existing) { this.deleteStep(existing); return; }   // Tippen auf vorhandenen = entfernen
-    const foot = this.nextFoot(role);
+    if (existing) { this.deleteStep(existing); return; }   // auf vorhandenen tippen = entfernen
+    const foot = lastFoot[role] === 'L' ? 'R' : 'L';        // Auto-Fuß (in der Liste änderbar)
     const row = {
       id: uuid(), project_id: this.project.id, tempo_section_id: sec.id,
       role, group_number: Number(this.editGroup),
-      beat_pos: Math.round(beat * 1000) / 1000,
-      length_beats: this.editValue === 'L' ? 2 : 1,
+      beat_pos: Math.round(beat * 1000) / 1000, length_beats: long ? 2 : 1,
       foot, value: null
     };
-    this.steps.push(row);
-    db.steps.put(row).catch(() => {});
+    this.steps.push(row); db.steps.put(row).catch(() => {});
     lastFoot[role] = foot;
     this.persistGeneric('steps', 'insert', row);
     this.scheduleLaneDraw();
   },
-  tapStep() { if (ws) this.placeStepAtTime(this.editRole, ws.getCurrentTime()); },
+  placeNoteAtTime(time) {
+    if (!this.project || this.currentMode !== 'editor') return;
+    const sec = this.sectionAt(time);
+    if (!sec) { this.setStatus('Hier ist kein Tempo-Abschnitt'); return; }
+    const spb = 60 / (Number(sec.bpm) || 120);
+    let beat = Math.round(((time - Number(sec.offset_sec || 0)) / spb) / 0.5) * 0.5;
+    if (beat < 0) beat = 0;
+    const existing = this.steps.find(s => s.role === 'note' && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25);
+    if (existing) { this.deleteStep(existing); return; }
+    const row = {
+      id: uuid(), project_id: this.project.id, tempo_section_id: sec.id,
+      role: 'note', group_number: 0, beat_pos: Math.round(beat * 1000) / 1000,
+      length_beats: 1, foot: null, value: ''
+    };
+    this.steps.push(row); db.steps.put(row).catch(() => {});
+    this.persistGeneric('steps', 'insert', row);
+    this.setStatus('Notiz gesetzt – Wort in der Liste eintragen');
+    this.scheduleLaneDraw();
+  },
   deleteStep(s) {
     this.steps = this.steps.filter(x => x.id !== s.id);
     db.steps.delete(s.id).catch(() => {});
@@ -1094,21 +1143,35 @@ Alpine.data('choreo', () => ({
     this.scheduleLaneDraw();
   },
   clearSteps() {
-    const toDel = this.steps.filter(s => s.role === this.editRole && Number(s.group_number) === Number(this.editGroup));
-    if (!toDel.length) { this.setStatus('Keine Schritte in dieser Auswahl'); return; }
-    if (!confirm(`Alle ${toDel.length} ${this.editRole === 'herren' ? 'Leader' : 'Follower'}-Schritte (Gruppe ${this.editGroup}) löschen?`)) return;
+    const toDel = this.steps.filter(s => s.role !== 'note' && Number(s.group_number) === Number(this.editGroup));
+    if (!toDel.length) { this.setStatus('Keine Schritte in dieser Gruppe'); return; }
+    if (!confirm(`Alle ${toDel.length} Schritte in Gruppe ${this.editGroup} löschen?`)) return;
     const ids = new Set(toDel.map(s => s.id));
     this.steps = this.steps.filter(s => !ids.has(s.id));
     for (const s of toDel) { db.steps.delete(s.id).catch(() => {}); this.persistGeneric('steps', 'delete', s); }
     this.scheduleLaneDraw();
   },
-  // Liste der Schritte der aktuellen Editier-Auswahl, nach Zeit sortiert
+  // Schritt-Liste der aktuellen Gruppe (beide Spuren), nach Zeit
   get editSteps() {
     return this.steps
-      .filter(s => s.role === this.editRole && Number(s.group_number) === Number(this.editGroup))
+      .filter(s => s.role !== 'note' && Number(s.group_number) === Number(this.editGroup))
       .map(s => ({ s, t: this.stepTime(s) }))
       .filter(o => o.t != null)
       .sort((a, b) => a.t - b.t);
+  },
+  // Notizen-Spur-Liste, nach Zeit
+  get noteSteps() {
+    return this.steps
+      .filter(s => s.role === 'note')
+      .map(s => ({ s, t: this.stepTime(s) }))
+      .filter(o => o.t != null)
+      .sort((a, b) => a.t - b.t);
+  },
+  renameNote(s, text) {
+    s.value = text;
+    db.steps.put(JSON.parse(JSON.stringify(s))).catch(() => {});
+    this.debouncedUpdate('steps', s.id, { value: text });
+    this.scheduleLaneDraw();
   },
   toggleStepFoot(s) {
     const f = s.foot === 'R' ? 'L' : 'R';
@@ -1118,7 +1181,6 @@ Alpine.data('choreo', () => ({
     this.scheduleLaneDraw();
   },
   setTab(t) { this.bottomTab = t; this.scheduleLaneDraw(); },
-  setEditRole(r) { this.editRole = r; this.scheduleLaneDraw(); },
   nudgeEditGroup(d) { this.editGroup = Math.max(0, Math.min(this.GROUP_MAX, Number(this.editGroup) + d)); this.scheduleLaneDraw(); },
   setStepDisplay(m) { this.stepDisplay = m; this.scheduleLaneDraw(); },
   cycleStepDisplay() {

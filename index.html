@@ -56,6 +56,7 @@
     <div id="lanes">
       <span class="lane-label lane-h">L</span>
       <span class="lane-label lane-d">F</span>
+      <span class="lane-label lane-n">N</span>
     </div>
   </section>
 
@@ -77,15 +78,15 @@
   <section id="bottom-section">
     <div class="tabbar">
       <button :class="{ active: bottomTab === 'steps' }" @click="setTab('steps')">Schritte &amp; Gruppen</button>
-      <button :class="{ active: bottomTab === 'notes' }" @click="setTab('notes')">Notizen</button>
+      <button :class="{ active: bottomTab === 'notes' }" @click="setTab('notes')">Sprungmarken</button>
     </div>
 
     <div class="tab-content">
 
-      <!-- Tab: Notizen / Segmente -->
+      <!-- Tab: Sprungmarken -->
       <div x-show="bottomTab === 'notes'" class="tab-pane">
         <div class="notes-head">
-          <h2>Segmente</h2>
+          <h2>Sprungmarken</h2>
           <span x-show="currentMode === 'editor' && lockOwned" class="badge lock">Du bearbeitest</span>
           <span x-show="currentMode === 'editor' && !lockOwned && !online" class="badge offline">Offline-Bearbeitung</span>
         </div>
@@ -112,10 +113,12 @@
                      @input="onSegmentInput(seg, 'label', $event.target.value)" />
               <button x-show="currentMode === 'editor'" class="icon danger" @click="deleteSegment(seg)" aria-label="Löschen">🗑</button>
             </div>
-            <textarea class="notes" placeholder="Notizen / Bewegung…" rows="2"
+            <!-- Notiz-Textfeld nur im Editor oder wenn Text vorhanden; wächst mit Inhalt -->
+            <textarea x-show="currentMode === 'editor' || seg.notes" class="notes auto" placeholder="Notiz…" rows="1"
                       :readonly="currentMode !== 'editor'"
                       :value="seg.notes"
-                      @input="onSegmentInput(seg, 'notes', $event.target.value)"></textarea>
+                      x-init="$nextTick(() => { $el.style.height='auto'; $el.style.height=$el.scrollHeight+'px'; })"
+                      @input="$el.style.height='auto'; $el.style.height=$el.scrollHeight+'px'; onSegmentInput(seg, 'notes', $event.target.value)"></textarea>
           </div>
         </template>
       </div>
@@ -158,56 +161,40 @@
 
         <template x-if="currentMode === 'editor'">
           <div>
-            <!-- ===== Schritte eintragen ===== -->
+            <!-- ===== Schritte eintragen (gestisch in den Spuren) ===== -->
             <div class="section-title">Schritte eintragen</div>
+            <p class="hint">In die <strong>L</strong>-/<strong>F</strong>-Spur oben tippen = Schritt (½-Beat, Auto-Fuß). Gedrückt halten = <strong>langer</strong> Schritt. In die <strong>N</strong>-Spur tippen = Notiz. Nochmal auf einen Punkt tippen entfernt ihn.</p>
 
-            <label class="mini-label">Spur</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editRole === 'herren' }" @click="setEditRole('herren')" style="flex:1">Leader</button>
-              <button :class="{ active: editRole === 'damen' }" @click="setEditRole('damen')" style="flex:1">Follower</button>
-            </div>
-
-            <label class="mini-label">Gruppe (0 = alle)</label>
+            <label class="mini-label">Gruppe für neue Schritte (0 = alle)</label>
             <div class="calib-row">
               <button class="icon" @click="nudgeEditGroup(-1)">−</button>
               <span class="calib-val" x-text="editGroup === 0 ? 'alle' : ('Gruppe ' + editGroup)"></span>
               <button class="icon" @click="nudgeEditGroup(1)">＋</button>
             </div>
 
-            <label class="mini-label">Fuß</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editFoot === 'auto' }" @click="editFoot = 'auto'" style="flex:1">Auto</button>
-              <button :class="{ active: editFoot === 'L' }" @click="editFoot = 'L'" style="flex:1;color:#6c8cff">Links</button>
-              <button :class="{ active: editFoot === 'R' }" @click="editFoot = 'R'" style="flex:1;color:#ff5a5a">Rechts</button>
-            </div>
-
-            <label class="mini-label">Wert</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editValue === 'S' }" @click="editValue = 'S'" style="flex:1">S · 1</button>
-              <button :class="{ active: editValue === 'L' }" @click="editValue = 'L'" style="flex:1">L · 2</button>
-              <button :class="{ active: editValue === 'U' }" @click="editValue = 'U'" style="flex:1">u · und</button>
-            </div>
-
-            <label class="mini-label">Raster</label>
-            <div class="mode-toggle" style="width:100%">
-              <button :class="{ active: editSnap === 'beat' }" @click="editSnap = 'beat'" style="flex:1">ganzer Beat</button>
-              <button :class="{ active: editSnap === 'half' }" @click="editSnap = 'half'" style="flex:1">½ Beat</button>
-            </div>
-
-            <button class="primary" style="width:100%;margin-top:12px;padding:14px" @click="tapStep()">● Schritt an Position setzen</button>
-            <p class="hint">Abspielen und im Takt auf den Button tippen – oder direkt in die L-/F-Spur unter der Welle tippen. Nochmal auf einen Schritt tippen entfernt ihn.</p>
-
             <div class="section-title" style="display:flex;align-items:center;gap:8px">
-              <span style="flex:1">Liste · <span x-text="editRole === 'herren' ? 'Leader' : 'Follower'"></span> · <span x-text="editGroup === 0 ? 'alle' : 'Gr. ' + editGroup"></span></span>
+              <span style="flex:1">Schritte · <span x-text="editGroup === 0 ? 'alle' : 'Gr. ' + editGroup"></span></span>
               <button class="danger" style="padding:4px 8px;font-size:12px" @click="clearSteps()">Alle löschen</button>
             </div>
-            <template x-if="!editSteps.length"><p class="hint">Noch keine Schritte in dieser Auswahl.</p></template>
+            <template x-if="!editSteps.length"><p class="hint">Noch keine Schritte in dieser Gruppe.</p></template>
             <template x-for="o in editSteps" :key="o.s.id">
               <div class="step-row">
                 <button class="ts" @click="seekTo(o.t)" x-text="fmt(o.t)"></button>
+                <span class="role-tag" :class="o.s.role === 'herren' ? 'role-l' : 'role-f'" x-text="o.s.role === 'herren' ? 'L' : 'F'"></span>
                 <button class="foot-chip" :class="o.s.foot === 'R' ? 'foot-r' : 'foot-l'" @click="toggleStepFoot(o.s)" x-text="o.s.foot === 'R' ? 'R' : 'L'"></button>
                 <span class="step-val" x-text="isOffbeat(o.s) ? 'u' : (Number(o.s.length_beats) >= 2 ? 'L' : 'S')"></span>
                 <button class="icon danger" @click="deleteStep(o.s)" aria-label="Schritt löschen">🗑</button>
+              </div>
+            </template>
+
+            <!-- ===== Notizen-Spur ===== -->
+            <div class="section-title" style="margin-top:20px">Notizen-Spur</div>
+            <template x-if="!noteSteps.length"><p class="hint">In die N-Spur (unter L/F) tippen, um eine Notiz zu setzen, dann hier das Wort eintragen.</p></template>
+            <template x-for="o in noteSteps" :key="o.s.id">
+              <div class="step-row">
+                <button class="ts" @click="seekTo(o.t)" x-text="fmt(o.t)"></button>
+                <input type="text" style="flex:1" placeholder="Wort / Notiz" :value="o.s.value || ''" @input="renameNote(o.s, $event.target.value)" />
+                <button class="icon danger" @click="deleteStep(o.s)" aria-label="Notiz löschen">🗑</button>
               </div>
             </template>
 
