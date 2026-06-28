@@ -146,8 +146,8 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 6px;
+  padding: 0 10px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
 }
@@ -155,16 +155,44 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   font-variant-numeric: tabular-nums;
   font-size: 13px;
   color: var(--muted);
-  min-width: 84px;
+  min-width: 42px;
 }
 #controls-bar .spacer { flex: 1; }
+#controls-bar .icon { width: 34px; height: 34px; }
+.icon svg { display: block; }
 .play-btn {
-  width: 46px; height: 46px; border-radius: 50%;
+  width: 44px; height: 44px; border-radius: 50%;
   background: var(--accent); border-color: var(--accent); color: #0b1020;
   display: inline-flex; align-items: center; justify-content: center;
   flex-shrink: 0; padding: 0;
 }
 .play-btn svg { display: block; }
+
+/* Topbar-Icons (Burger/Zahnrad) etwas kompakter */
+.ticon { width: 34px; height: 34px; }
+
+/* Anzeige-Umschalter (1 2 3 / Punkte / L u S) */
+.disp-toggle { display: flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; flex-shrink: 0; }
+.disp-toggle button {
+  border: none; border-radius: 0; background: transparent;
+  height: 34px; padding: 0 8px; font-size: 12px; color: var(--muted);
+  display: inline-flex; align-items: center; justify-content: center; gap: 2px;
+}
+.disp-toggle button.active { background: var(--accent); color: #0b1020; font-weight: 700; }
+.disp-toggle .dd { display: inline-block; border-radius: 50%; background: currentColor; }
+.disp-toggle .dd.s { width: 4px; height: 4px; }
+.disp-toggle .dd.m { width: 6px; height: 6px; }
+.disp-toggle .dd.l { width: 8px; height: 8px; }
+
+/* „＋ Marke" kompakt */
+.mark-btn {
+  height: 34px; padding: 0 12px; border-radius: 9px; font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+}
+.mark-btn svg { display: block; }
+
+/* „⟲ Takt"-Sprung an Sprungmarke */
+.segment .ts.barback { background: var(--panel-2); color: var(--muted); }
 
 /* sichtbare Scrollbar im Wavesurfer-Scrollcontainer (Fallback/PC) */
 #waveform ::part(scroll) { scrollbar-width: thin; scrollbar-color: #555 transparent; }

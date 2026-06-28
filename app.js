@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 18;
+const APP_VERSION = 19;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -130,6 +130,8 @@ Alpine.data('choreo', () => ({
   steps: [],                        // Schritte (role 'herren'/'damen') + Notizen-Spur (role 'note')
   stepDisplay: 'dots',              // 'dots' | 'letters' | 'numbers'
   editGroup: 0,                     // neue Schritte gehören zu dieser Gruppe (0 = alle)
+  noteModalOpen: false,             // Popup zum Eintragen einer Notiz
+  noteText: '',
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -857,11 +859,43 @@ Alpine.data('choreo', () => ({
     this.persistGeneric('parts', 'delete', part);
   },
 
-  /* ===================== Gruppen-Zuteilung ===================== */
+  /* ===================== Gruppen (benannt) + Zuteilung ===================== */
   GROUP_MAX: 8,
+  // definierte Gruppen-Nummern eines Abschnitts (aus part.group_names)
+  groupNumbersOf(part) {
+    const g = (part && part.group_names) || {};
+    return Object.keys(g).map(Number).filter(n => n > 0).sort((a, b) => a - b);
+  },
+  groupNameOf(part, n) {
+    if (!n) return 'alle';
+    const g = (part && part.group_names) || {};
+    return (g[n] && String(g[n]).trim()) || ('Gruppe ' + n);
+  },
+  groupNameRaw(part, n) { const g = (part && part.group_names) || {}; return g[n] || ''; },
+  addGroup(part) {
+    const nums = this.groupNumbersOf(part);
+    const next = (nums.length ? Math.max(...nums) : 0) + 1;
+    const names = Object.assign({}, part.group_names || {}); names[next] = '';
+    this.patchPart(part, { group_names: names });
+  },
+  renameGroup(part, n, name) {
+    const names = Object.assign({}, part.group_names || {}); names[n] = name;
+    this.patchPart(part, { group_names: names });
+    this.scheduleLaneDraw();
+  },
+  removeGroup(part, n) {
+    const names = Object.assign({}, part.group_names || {}); delete names[n];
+    this.patchPart(part, { group_names: names });
+    const affected = this.memberships.filter(m => m.part_id === part.id && Number(m.group_number) === Number(n));
+    for (const m of affected) this.setMembership(part, m.person_number, 0);
+  },
+  // Chip schaltet durch: alle -> definierte Gruppen -> alle
   cycleGroup(part, personNumber) {
+    const seq = [0, ...this.groupNumbersOf(part)];
+    if (seq.length <= 1) { this.setStatus('Erst Gruppe(n) anlegen'); return; }
     const cur = this.groupOf(part, personNumber);
-    this.setMembership(part, personNumber, (cur + 1) % (this.GROUP_MAX + 1));
+    const idx = Math.max(0, seq.indexOf(cur));
+    this.setMembership(part, personNumber, seq[(idx + 1) % seq.length]);
   },
   setMembership(part, personNumber, groupNumber) {
     const m = this.memberships.find(x => x.part_id === part.id && Number(x.person_number) === Number(personNumber));
@@ -1068,12 +1102,11 @@ Alpine.data('choreo', () => ({
     this._lpHandled = false; this._lpMoved = false;
     this._lpRole = this.laneZoneRole(e.clientY - rect.top, rect.height);
     this._lpTime = vp.startT + (e.clientX - rect.left) / vp.pxPerSec;
-    // Lang-Halten in den Schritt-Spuren = langer Schritt
-    if (this.currentMode === 'editor' && this.bottomTab === 'steps' && this._lpRole !== 'note') {
+    if (this.currentMode === 'editor' && this.bottomTab === 'steps') {
       this.cancelLongPress();
       this._lpTimer = setTimeout(() => {
         this._lpTimer = null; this._lpHandled = true;
-        this.placeStepAtTime(this._lpRole, this._lpTime, true);
+        this.laneLongPress(this._lpRole, this._lpTime);
         if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) {} }
       }, 380);
     }
@@ -1086,46 +1119,71 @@ Alpine.data('choreo', () => ({
   cancelLongPress() { if (this._lpTimer) { clearTimeout(this._lpTimer); this._lpTimer = null; } },
   onLanePointerUp() {
     this.cancelLongPress();
-    if (this._lpHandled) { this._lpHandled = false; return; }   // Lang-Press hat schon gesetzt
+    if (this._lpHandled) { this._lpHandled = false; return; }   // Lang-Press hat schon gehandelt
     if (this._lpMoved) return;
-    const editing = this.currentMode === 'editor' && this.bottomTab === 'steps';
-    if (editing && this._lpRole === 'note') { this.placeNoteAtTime(this._lpTime); return; }
-    if (editing) { this.placeStepAtTime(this._lpRole, this._lpTime, false); return; }
-    if (ws) ws.setTime(Math.max(0, this._lpTime));   // Training: nur springen
+    if (this.currentMode === 'editor' && this.bottomTab === 'steps') { this.laneTap(this._lpRole, this._lpTime); return; }
+    if (ws) ws.setTime(Math.max(0, this._lpTime));   // sonst: nur springen
+  },
+
+  // kurzer Tap: vorhandenes -> Fuß wechseln (Notiz -> bearbeiten); leer -> neu (kurz)
+  laneTap(role, time) {
+    if (role === 'note') {
+      const ex = this.findNote(time);
+      if (ex) this.openNoteModal(ex); else this.createNote(time);
+      return;
+    }
+    const ex = this.findStep(role, time);
+    if (ex) this.toggleStepFoot(ex); else this.placeStep(role, time, false);
+  },
+  // langes Halten: vorhandenes -> löschen; leer -> langer Schritt (Notiz -> neu)
+  laneLongPress(role, time) {
+    if (role === 'note') {
+      const ex = this.findNote(time);
+      if (ex) this.deleteStep(ex); else this.createNote(time);
+      return;
+    }
+    const ex = this.findStep(role, time);
+    if (ex) this.deleteStep(ex); else this.placeStep(role, time, true);
   },
 
   /* ===================== Schritte/Notizen: Daten-Mutationen ===================== */
-  placeStepAtTime(role, time, long) {
+  snapBeat(sec, time) {
+    const spb = 60 / (Number(sec.bpm) || 120);
+    const b = Math.round(((time - Number(sec.offset_sec || 0)) / spb) / 0.5) * 0.5;  // immer ½-Beat
+    return b < 0 ? 0 : b;
+  },
+  findStep(role, time) {
+    const sec = this.sectionAt(time); if (!sec) return null;
+    const beat = this.snapBeat(sec, time);
+    return this.steps.find(s => s.role === role && Number(s.group_number) === Number(this.editGroup)
+      && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25) || null;
+  },
+  findNote(time) {
+    const sec = this.sectionAt(time); if (!sec) return null;
+    const beat = this.snapBeat(sec, time);
+    return this.steps.find(s => s.role === 'note' && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25) || null;
+  },
+  placeStep(role, time, long) {
     if (!this.project || this.currentMode !== 'editor') return;
     const sec = this.sectionAt(time);
     if (!sec) { this.setStatus('Hier ist kein Tempo-Abschnitt'); return; }
-    const spb = 60 / (Number(sec.bpm) || 120);
-    let beat = Math.round(((time - Number(sec.offset_sec || 0)) / spb) / 0.5) * 0.5;  // immer ½-Beat
-    if (beat < 0) beat = 0;
-    const existing = this.steps.find(s => s.role === role && Number(s.group_number) === Number(this.editGroup)
-      && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25);
-    if (existing) { this.deleteStep(existing); return; }   // auf vorhandenen tippen = entfernen
-    const foot = lastFoot[role] === 'L' ? 'R' : 'L';        // Auto-Fuß (in der Liste änderbar)
+    const beat = this.snapBeat(sec, time);
+    const foot = lastFoot[role] === 'L' ? 'R' : 'L';   // Auto-Fuß; Tippen auf Punkt wechselt ihn
     const row = {
       id: uuid(), project_id: this.project.id, tempo_section_id: sec.id,
       role, group_number: Number(this.editGroup),
-      beat_pos: Math.round(beat * 1000) / 1000, length_beats: long ? 2 : 1,
-      foot, value: null
+      beat_pos: Math.round(beat * 1000) / 1000, length_beats: long ? 2 : 1, foot, value: null
     };
     this.steps.push(row); db.steps.put(row).catch(() => {});
     lastFoot[role] = foot;
     this.persistGeneric('steps', 'insert', row);
     this.scheduleLaneDraw();
   },
-  placeNoteAtTime(time) {
+  createNote(time) {
     if (!this.project || this.currentMode !== 'editor') return;
     const sec = this.sectionAt(time);
     if (!sec) { this.setStatus('Hier ist kein Tempo-Abschnitt'); return; }
-    const spb = 60 / (Number(sec.bpm) || 120);
-    let beat = Math.round(((time - Number(sec.offset_sec || 0)) / spb) / 0.5) * 0.5;
-    if (beat < 0) beat = 0;
-    const existing = this.steps.find(s => s.role === 'note' && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25);
-    if (existing) { this.deleteStep(existing); return; }
+    const beat = this.snapBeat(sec, time);
     const row = {
       id: uuid(), project_id: this.project.id, tempo_section_id: sec.id,
       role: 'note', group_number: 0, beat_pos: Math.round(beat * 1000) / 1000,
@@ -1133,39 +1191,14 @@ Alpine.data('choreo', () => ({
     };
     this.steps.push(row); db.steps.put(row).catch(() => {});
     this.persistGeneric('steps', 'insert', row);
-    this.setStatus('Notiz gesetzt – Wort in der Liste eintragen');
     this.scheduleLaneDraw();
+    this.openNoteModal(row);   // direkt Popup zum Eintragen
   },
   deleteStep(s) {
     this.steps = this.steps.filter(x => x.id !== s.id);
     db.steps.delete(s.id).catch(() => {});
     this.persistGeneric('steps', 'delete', s);
     this.scheduleLaneDraw();
-  },
-  clearSteps() {
-    const toDel = this.steps.filter(s => s.role !== 'note' && Number(s.group_number) === Number(this.editGroup));
-    if (!toDel.length) { this.setStatus('Keine Schritte in dieser Gruppe'); return; }
-    if (!confirm(`Alle ${toDel.length} Schritte in Gruppe ${this.editGroup} löschen?`)) return;
-    const ids = new Set(toDel.map(s => s.id));
-    this.steps = this.steps.filter(s => !ids.has(s.id));
-    for (const s of toDel) { db.steps.delete(s.id).catch(() => {}); this.persistGeneric('steps', 'delete', s); }
-    this.scheduleLaneDraw();
-  },
-  // Schritt-Liste der aktuellen Gruppe (beide Spuren), nach Zeit
-  get editSteps() {
-    return this.steps
-      .filter(s => s.role !== 'note' && Number(s.group_number) === Number(this.editGroup))
-      .map(s => ({ s, t: this.stepTime(s) }))
-      .filter(o => o.t != null)
-      .sort((a, b) => a.t - b.t);
-  },
-  // Notizen-Spur-Liste, nach Zeit
-  get noteSteps() {
-    return this.steps
-      .filter(s => s.role === 'note')
-      .map(s => ({ s, t: this.stepTime(s) }))
-      .filter(o => o.t != null)
-      .sort((a, b) => a.t - b.t);
   },
   renameNote(s, text) {
     s.value = text;
@@ -1180,15 +1213,25 @@ Alpine.data('choreo', () => ({
     this.debouncedUpdate('steps', s.id, { foot: f });
     this.scheduleLaneDraw();
   },
+  // ---- Notiz-Popup ----
+  openNoteModal(s) { this._noteStep = s; this.noteText = s.value || ''; this.noteModalOpen = true; },
+  saveNoteModal() {
+    const s = this._noteStep;
+    if (s) { const t = (this.noteText || '').trim(); if (t) this.renameNote(s, t); else this.deleteStep(s); }
+    this.noteModalOpen = false; this._noteStep = null;
+  },
+  deleteNoteModal() {
+    if (this._noteStep) this.deleteStep(this._noteStep);
+    this.noteModalOpen = false; this._noteStep = null;
+  },
+  // Sprung einen Takt vor eine Sprungmarke
+  seekBarBefore(timestamp) {
+    const sec = this.sectionAt(Number(timestamp) || 0);
+    this.seekTo(Math.max(0, (Number(timestamp) || 0) - (this.barLengthOf(sec) || 0)));
+  },
   setTab(t) { this.bottomTab = t; this.scheduleLaneDraw(); },
   nudgeEditGroup(d) { this.editGroup = Math.max(0, Math.min(this.GROUP_MAX, Number(this.editGroup) + d)); this.scheduleLaneDraw(); },
   setStepDisplay(m) { this.stepDisplay = m; this.scheduleLaneDraw(); },
-  cycleStepDisplay() {
-    const order = ['dots', 'letters', 'numbers'];
-    this.stepDisplay = order[(order.indexOf(this.stepDisplay) + 1) % order.length];
-    this.scheduleLaneDraw();
-  },
-  get stepDisplayIcon() { return this.stepDisplay === 'dots' ? '●' : (this.stepDisplay === 'letters' ? 'L' : '1'); },
 
   /* ===================== Projekt-Einstellungen / Kalibrierung ===================== */
   openSettings() {

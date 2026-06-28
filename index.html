@@ -18,7 +18,9 @@
   <!-- ===== Audio-Bereich (oberes Drittel) ===== -->
   <section id="audio-section">
     <div class="topbar">
-      <button class="icon" @click="menuOpen = true" aria-label="Menü">☰</button>
+      <button class="icon ticon" @click="menuOpen = true" aria-label="Menü">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
       <div class="title">
         <span x-text="project ? project.title : 'Kein Projekt'"></span>
         <template x-if="activeTempo">
@@ -26,7 +28,9 @@
         </template>
       </div>
       <span x-show="!online" class="badge offline">offline</span>
-      <button class="icon" x-show="project && isEditor" @click="openSettings()" aria-label="Projekt-Einstellungen">⚙️</button>
+      <button class="icon ticon" x-show="project && isEditor" @click="openSettings()" aria-label="Projekt-Einstellungen">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
       <div class="mode-toggle" x-show="project">
         <button :class="{ active: currentMode === 'training' }"
                 @click="currentMode === 'editor' && toggleMode()">Training</button>
@@ -56,7 +60,6 @@
     <div id="lanes">
       <span class="lane-label lane-h">L</span>
       <span class="lane-label lane-d">F</span>
-      <span class="lane-label lane-n">N</span>
     </div>
   </section>
 
@@ -66,12 +69,19 @@
       <svg x-show="!isPlaying" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
       <svg x-show="isPlaying" x-cloak width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor"/></svg>
     </button>
-    <span class="time" x-text="fmt(currentTime) + ' / ' + fmt(duration)"></span>
+    <span class="time" x-text="fmt(currentTime)"></span>
+    <div class="disp-toggle">
+      <button :class="{ active: stepDisplay === 'numbers' }" @click="setStepDisplay('numbers')" title="Zahlen">123</button>
+      <button :class="{ active: stepDisplay === 'dots' }" @click="setStepDisplay('dots')" title="Punkte"><i class="dd s"></i><i class="dd m"></i><i class="dd l"></i></button>
+      <button :class="{ active: stepDisplay === 'letters' }" @click="setStepDisplay('letters')" title="Buchstaben">L u S</button>
+    </div>
     <span class="spacer"></span>
     <button class="icon" @click="zoomOut()" :disabled="!project" aria-label="Verkleinern">−</button>
     <button class="icon" @click="zoomIn()" :disabled="!project" aria-label="Vergrößern">+</button>
-    <button class="icon" @click="cycleStepDisplay()" :disabled="!project" x-text="stepDisplayIcon" title="Schritt-Anzeige: Punkte / L·S·U / Zahlen"></button>
-    <button x-show="currentMode === 'editor'" class="primary" @click="addSegmentAtCursor()">＋ Marke</button>
+    <button x-show="currentMode === 'editor'" class="mark-btn primary" @click="addSegmentAtCursor()">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      Marke
+    </button>
   </div>
 
   <!-- ===== Unterer Bereich: Tabs ===== -->
@@ -106,12 +116,13 @@
         <template x-for="seg in sortedSegments" :key="seg.id">
           <div class="segment" :id="'seg-' + seg.id" :class="{ active: seg.id === activeSegmentId }">
             <div class="row">
+              <button class="ts barback" @click="seekBarBefore(seg.timestamp)" title="Einen Takt vorher starten">⟲ Takt</button>
               <button class="ts" @click="seekTo(seg.timestamp)" x-text="fmt(seg.timestamp)"></button>
               <input class="label-input" type="text" placeholder="Label (z.B. Hebung)"
                      :readonly="currentMode !== 'editor'"
                      :value="seg.label"
                      @input="onSegmentInput(seg, 'label', $event.target.value)" />
-              <button x-show="currentMode === 'editor'" class="icon danger" @click="deleteSegment(seg)" aria-label="Löschen">🗑</button>
+              <button x-show="currentMode === 'editor'" class="icon danger" @click="deleteSegment(seg)" aria-label="Löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
             </div>
             <!-- Notiz-Textfeld nur im Editor oder wenn Text vorhanden; wächst mit Inhalt -->
             <textarea x-show="currentMode === 'editor' || seg.notes" class="notes auto" placeholder="Notiz…" rows="1"
@@ -140,16 +151,10 @@
           </template>
         </div>
 
-        <!-- Anzeige-Modus -->
-        <div class="mode-toggle" style="width:100%;margin-bottom:8px">
-          <button :class="{ active: stepDisplay === 'dots' }" @click="setStepDisplay('dots')" style="flex:1">Punkte</button>
-          <button :class="{ active: stepDisplay === 'letters' }" @click="setStepDisplay('letters')" style="flex:1">L·S·u</button>
-          <button :class="{ active: stepDisplay === 'numbers' }" @click="setStepDisplay('numbers')" style="flex:1">Zahlen</button>
-        </div>
         <p class="hint">
-          Spuren: <strong>L</strong> = Leader, <strong>F</strong> = Follower &nbsp;·&nbsp;
+          Spuren oben: <strong>L</strong> = Leader, <strong>F</strong> = Follower, unten = Notizen &nbsp;·&nbsp;
           <span style="color:#6c8cff">●</span> linker Fuß <span style="color:#ff5a5a">●</span> rechter Fuß &nbsp;·&nbsp;
-          L = Lang (2) · S = Schnell (1) · u = „und" (Offbeat)
+          Anzeige oben in der Leiste umschaltbar.
         </p>
 
         <template x-if="!isEditor">
@@ -163,49 +168,23 @@
           <div>
             <!-- ===== Schritte eintragen (gestisch in den Spuren) ===== -->
             <div class="section-title">Schritte eintragen</div>
-            <p class="hint">In die <strong>L</strong>-/<strong>F</strong>-Spur oben tippen = Schritt (½-Beat, Auto-Fuß). Gedrückt halten = <strong>langer</strong> Schritt. In die <strong>N</strong>-Spur tippen = Notiz. Nochmal auf einen Punkt tippen entfernt ihn.</p>
+            <p class="hint">Direkt in die <strong>L</strong>-/<strong>F</strong>-Spur oben tippen = Schritt (½-Beat, Auto-Fuß). <strong>Halten</strong> = langer Schritt. Auf einen Punkt tippen = Fuß wechseln, halten = löschen. In die untere Spur tippen = Notiz (mit Popup).</p>
 
             <label class="mini-label">Gruppe für neue Schritte (0 = alle)</label>
             <div class="calib-row">
               <button class="icon" @click="nudgeEditGroup(-1)">−</button>
-              <span class="calib-val" x-text="editGroup === 0 ? 'alle' : ('Gruppe ' + editGroup)"></span>
+              <span class="calib-val" x-text="editGroup === 0 ? 'alle' : groupNameOf(activePart, editGroup)"></span>
               <button class="icon" @click="nudgeEditGroup(1)">＋</button>
             </div>
 
-            <div class="section-title" style="display:flex;align-items:center;gap:8px">
-              <span style="flex:1">Schritte · <span x-text="editGroup === 0 ? 'alle' : 'Gr. ' + editGroup"></span></span>
-              <button class="danger" style="padding:4px 8px;font-size:12px" @click="clearSteps()">Alle löschen</button>
-            </div>
-            <template x-if="!editSteps.length"><p class="hint">Noch keine Schritte in dieser Gruppe.</p></template>
-            <template x-for="o in editSteps" :key="o.s.id">
-              <div class="step-row">
-                <button class="ts" @click="seekTo(o.t)" x-text="fmt(o.t)"></button>
-                <span class="role-tag" :class="o.s.role === 'herren' ? 'role-l' : 'role-f'" x-text="o.s.role === 'herren' ? 'L' : 'F'"></span>
-                <button class="foot-chip" :class="o.s.foot === 'R' ? 'foot-r' : 'foot-l'" @click="toggleStepFoot(o.s)" x-text="o.s.foot === 'R' ? 'R' : 'L'"></button>
-                <span class="step-val" x-text="isOffbeat(o.s) ? 'u' : (Number(o.s.length_beats) >= 2 ? 'L' : 'S')"></span>
-                <button class="icon danger" @click="deleteStep(o.s)" aria-label="Schritt löschen">🗑</button>
-              </div>
-            </template>
-
-            <!-- ===== Notizen-Spur ===== -->
-            <div class="section-title" style="margin-top:20px">Notizen-Spur</div>
-            <template x-if="!noteSteps.length"><p class="hint">In die N-Spur (unter L/F) tippen, um eine Notiz zu setzen, dann hier das Wort eintragen.</p></template>
-            <template x-for="o in noteSteps" :key="o.s.id">
-              <div class="step-row">
-                <button class="ts" @click="seekTo(o.t)" x-text="fmt(o.t)"></button>
-                <input type="text" style="flex:1" placeholder="Wort / Notiz" :value="o.s.value || ''" @input="renameNote(o.s, $event.target.value)" />
-                <button class="icon danger" @click="deleteStep(o.s)" aria-label="Notiz löschen">🗑</button>
-              </div>
-            </template>
-
             <!-- ===== Abschnitte & Gruppen ===== -->
             <div class="section-title" style="margin-top:20px">Abschnitte &amp; Gruppen</div>
-            <p class="hint">Abschnitt anlegen (z.B. Sek 22–26), dann jedem Paar eine Gruppe geben (Tippen schaltet weiter: – ▸ 1 ▸ 2 …). „–" = alle gleich. Ein Paar sieht im Abschnitt die Schritte seiner Gruppe.</p>
+            <p class="hint">Abschnitt anlegen (z.B. Sek 22–26), Gruppen benennen (z.B. „rechts", „links"), dann jedem Paar per Tipp eine Gruppe geben. „–" = alle gleich.</p>
             <template x-for="part in sortedParts" :key="part.id">
               <div class="tempo-card">
                 <div class="tc-head">
                   <input class="tc-label" type="text" :value="part.label || ''" placeholder="Abschnitt-Name" @input="patchPart(part, { label: $event.target.value })" />
-                  <button class="icon danger" @click="removePart(part)" aria-label="Abschnitt löschen">🗑</button>
+                  <button class="icon danger" @click="removePart(part)" aria-label="Abschnitt löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
                 </div>
                 <div class="field two" style="margin-bottom:8px">
                   <div style="flex:1"><label>Start (s)</label>
@@ -221,12 +200,23 @@
                     </div>
                   </div>
                 </div>
-                <label class="mini-label">Gruppen-Zuteilung (pro Paar)</label>
+
+                <label class="mini-label">Gruppen</label>
+                <template x-for="n in groupNumbersOf(part)" :key="n">
+                  <div class="person-row">
+                    <span class="grp-chip" :class="'g' + n" style="min-width:28px" x-text="n"></span>
+                    <input type="text" :value="groupNameRaw(part, n)" placeholder="Gruppen-Name (z.B. rechts)" @input="renameGroup(part, n, $event.target.value)" />
+                    <button class="icon danger" @click="removeGroup(part, n)" aria-label="Gruppe löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
+                  </div>
+                </template>
+                <button class="primary" style="width:100%;margin:2px 0 10px" @click="addGroup(part)">＋ Gruppe</button>
+
+                <label class="mini-label">Zuteilung (pro Paar tippen)</label>
                 <div class="chip-grid">
                   <template x-for="p in sortedPersons" :key="p.id">
                     <button class="grp-chip" :class="'g' + groupOf(part, p.number)" @click="cycleGroup(part, p.number)">
                       <span x-text="p.number"></span>
-                      <span class="grp-tag" x-text="groupOf(part, p.number) ? ('G' + groupOf(part, p.number)) : '–'"></span>
+                      <span class="grp-tag" x-text="groupOf(part, p.number) ? groupNameOf(part, groupOf(part, p.number)) : '–'"></span>
                     </button>
                   </template>
                 </div>
@@ -241,7 +231,7 @@
               <div class="person-row">
                 <span class="person-num" x-text="p.number"></span>
                 <input type="text" :value="p.name || ''" placeholder="Name (optional)" @input="renamePerson(p, $event.target.value)" />
-                <button class="icon danger" @click="removePerson(p)" aria-label="Paar löschen">🗑</button>
+                <button class="icon danger" @click="removePerson(p)" aria-label="Paar löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
               </div>
             </template>
             <template x-if="!sortedPersons.length"><p class="hint">Noch keine Paare.</p></template>
@@ -280,7 +270,7 @@
                 <div class="pi-title" x-text="p.title"></div>
                 <div class="pi-meta" x-text="`${p.bpm} BPM · ${p.time_signature}`"></div>
               </div>
-              <button x-show="isEditor" class="icon danger" @click.stop="confirmDeleteProject(p)" aria-label="Projekt löschen">🗑</button>
+              <button x-show="isEditor" class="icon danger" @click.stop="confirmDeleteProject(p)" aria-label="Projekt löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
             </div>
           </template>
           <template x-if="projects.length === 0">
@@ -362,7 +352,7 @@
               <div class="tc-head">
                 <input class="tc-label" type="text" :value="sec.label || ''" placeholder="Abschnitt-Name"
                        @input="patchTempo(sec, { label: $event.target.value })" />
-                <button class="icon danger" x-show="sortedTempo.length > 1" @click="deleteTempoSection(sec)" aria-label="Abschnitt löschen">🗑</button>
+                <button class="icon danger" x-show="sortedTempo.length > 1" @click="deleteTempoSection(sec)" aria-label="Abschnitt löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
               </div>
 
               <div class="field two" style="margin-bottom:8px">
@@ -471,6 +461,24 @@
           <button class="primary" style="width:100%;margin-top:12px"
                   :disabled="!loginPassword || loggingIn" @click="doLogin()"
                   x-text="loggingIn ? 'Anmelden…' : 'Anmelden'"></button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ===== Notiz-Popup ===== -->
+  <template x-if="noteModalOpen">
+    <div>
+      <div class="scrim" @click="saveNoteModal()"></div>
+      <div class="modal">
+        <header><h2>Notiz</h2><button class="icon" @click="saveNoteModal()" aria-label="Schließen">✕</button></header>
+        <div class="body">
+          <input type="text" x-model="noteText" placeholder="Wort / Notiz"
+                 @keydown.enter="saveNoteModal()" x-init="$nextTick(() => $el.focus())" />
+          <div class="calib-row" style="margin-top:12px">
+            <button class="danger" @click="deleteNoteModal()">Löschen</button>
+            <button class="primary" style="flex:1" @click="saveNoteModal()">Fertig</button>
+          </div>
         </div>
       </div>
     </div>
