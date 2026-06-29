@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 20;
+const APP_VERSION = 21;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -1075,18 +1075,20 @@ Alpine.data('choreo', () => ({
     laneCtx.textBaseline = 'middle';
     laneCtx.font = '12px -apple-system, sans-serif';
     const showText = pxPerSec >= 30;
-    for (const st of this.steps) {
-      if (st.role !== 'note') continue;
+    for (const ent of this.laneEntries('note')) {   // gruppenabhängig wie die Schritte
+      const st = ent.s;
       const sec = this.tempoSections.find(x => x.id === st.tempo_section_id);
       if (!sec) continue;
       const spb = 60 / (Number(sec.bpm) || 120);
       const t = Number(sec.offset_sec || 0) + Number(st.beat_pos) * spb;
       if (t < startT - spb || t > endT + spb) continue;
       const x = (t - startT) * pxPerSec;
+      laneCtx.globalAlpha = ent.dim ? 0.3 : 1;
       laneCtx.fillStyle = '#ffcf6a';
       laneCtx.beginPath(); laneCtx.arc(x, cy, 4, 0, 7); laneCtx.fill();
       if (showText && st.value) { laneCtx.fillStyle = '#e8e8e8'; laneCtx.fillText(st.value, x + 7, cy); }
     }
+    laneCtx.globalAlpha = 1;
   },
 
   /* ===================== Lanes: Tippen / Halten ===================== */
@@ -1161,7 +1163,8 @@ Alpine.data('choreo', () => ({
   findNote(time) {
     const sec = this.sectionAt(time); if (!sec) return null;
     const beat = this.snapBeat(sec, time);
-    return this.steps.find(s => s.role === 'note' && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25) || null;
+    return this.steps.find(s => s.role === 'note' && Number(s.group_number) === Number(this.editGroup)
+      && s.tempo_section_id === sec.id && Math.abs(Number(s.beat_pos) - beat) < 0.25) || null;
   },
   placeStep(role, time, long) {
     if (!this.project || this.currentMode !== 'editor') return;
@@ -1186,7 +1189,7 @@ Alpine.data('choreo', () => ({
     const beat = this.snapBeat(sec, time);
     const row = {
       id: uuid(), project_id: this.project.id, tempo_section_id: sec.id,
-      role: 'note', group_number: 0, beat_pos: Math.round(beat * 1000) / 1000,
+      role: 'note', group_number: Number(this.editGroup), beat_pos: Math.round(beat * 1000) / 1000,
       length_beats: 1, foot: null, value: ''
     };
     this.steps.push(row); db.steps.put(row).catch(() => {});
@@ -1230,7 +1233,15 @@ Alpine.data('choreo', () => ({
     this.seekTo(Math.max(0, (Number(timestamp) || 0) - (this.barLengthOf(sec) || 0)));
   },
   setTab(t) { this.bottomTab = t; this.scheduleLaneDraw(); },
-  nudgeEditGroup(d) { this.editGroup = Math.max(0, Math.min(this.GROUP_MAX, Number(this.editGroup) + d)); this.scheduleLaneDraw(); },
+  // nur durch die im aktuellen Abschnitt definierten Gruppen schalten (+ „alle")
+  nudgeEditGroup(d) {
+    const seq = [0, ...this.groupNumbersOf(this.activePart)];
+    let idx = seq.indexOf(Number(this.editGroup));
+    if (idx < 0) idx = 0;
+    idx = (idx + (d > 0 ? 1 : -1) + seq.length) % seq.length;
+    this.editGroup = seq[idx];
+    this.scheduleLaneDraw();
+  },
   setStepDisplay(m) { this.stepDisplay = m; this.scheduleLaneDraw(); },
 
   /* ===================== Projekt-Einstellungen / Kalibrierung ===================== */
