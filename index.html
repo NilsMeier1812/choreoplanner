@@ -147,7 +147,7 @@
             </template>
           </select>
           <template x-if="myPersonNumber && activePart">
-            <p class="hint" style="margin-top:6px">Aktuell (<span x-text="activePart.label"></span>): <strong x-text="myGroup ? 'Gruppe ' + myGroup : 'keine Gruppe / alle gleich'"></strong></p>
+            <p class="hint" style="margin-top:6px">Aktuell (<span x-text="activePart.label"></span>): <strong x-text="myGroup ? groupNameOf(activePart, myGroup) : 'keine Gruppe / alle gleich'"></strong></p>
           </template>
         </div>
 
