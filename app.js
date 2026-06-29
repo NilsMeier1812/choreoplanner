@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 24;
+const APP_VERSION = 25;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -532,7 +532,9 @@ Alpine.data('choreo', () => ({
     // Grid + Lanes an Scroll/Zoom/Redraw koppeln. 'scroll' liefert den exakten
     // Sichtbereich (gleicher Bezug wie die Welle) -> kein Versatz Anzeige/Musik.
     ws.on('scroll', (vStart, vEnd, sLeft, sRight) => {
+      // exakteste Quelle: Wavesurfers eigene Geometrie des Sichtfensters
       if (vEnd > vStart && sRight > sLeft) { cachedPxPerSec = (sRight - sLeft) / (vEnd - vStart); this._vpStartT = vStart; }
+      else if (typeof vStart === 'number') this._vpStartT = vStart;
       this.scheduleDraw();
     });
     ws.on('zoom', () => { this.recomputeViewport(); this.scheduleDraw(); });
@@ -565,15 +567,17 @@ Alpine.data('choreo', () => ({
     if (gridCtx) gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   },
 
-  // Sichtbereich aus Wavesurfer ableiten. Primär liefert das 'scroll'-Event
-  // (visibleStartTime + scrollLeft/Right) den EXAKT gleichen Bezug wie die Welle.
-  // Hier nur die Inhaltsbreite (scrollWidth) als Fallback bei Zoom/Resize/Ready.
+  // Pixel/Sekunde aus den BEKANNTEN Größen rechnen statt aus scrollWidth
+  // (scrollWidth ist nach einem Zoom oft noch der alte Wert -> Desync).
+  // Wavesurfer rendert mit pxPerSec = max(minPxPerSec, Viewport-Breite / Dauer).
   recomputeViewport() {
-    cachedPxPerSec = 0;
-    if (!ws) return;
+    if (!ws || !gridCanvas) return;
     const dur = ws.getDuration(); if (!dur) return;
-    try { const wr = ws.getWrapper(); const cw = wr ? wr.scrollWidth : 0; if (cw) cachedPxPerSec = cw / dur; } catch (e) {}
-    if (cachedPxPerSec) this._vpStartT = (ws.getScroll() || 0) / cachedPxPerSec;
+    const viewW = gridCanvas.clientWidth || 0;
+    if (!viewW) return;                       // Layout noch nicht bereit -> alten Wert behalten
+    const minpps = this.zoom || 1;            // aktuelles minPxPerSec
+    cachedPxPerSec = Math.max(minpps, viewW / dur);
+    this._vpStartT = (ws.getScroll() || 0) / cachedPxPerSec;
   },
   gridViewport() {
     if (!ws || !cachedPxPerSec) return null;
