@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 23;
+const APP_VERSION = 24;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -524,7 +524,7 @@ Alpine.data('choreo', () => ({
     // 'ready'/'decode' sind die verlässlichen Signale (das load()-Promise kann hängen)
     ws.on('ready', () => this.onAudioReady());
     ws.on('decode', () => this.onAudioReady());
-    ws.on('play', () => { this.isPlaying = true; });
+    ws.on('play', () => { this.isPlaying = true; this.recalibrate(); });
     ws.on('pause', () => { this.isPlaying = false; });
     ws.on('finish', () => { this.isPlaying = false; });
     ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.scheduleDraw(); });
@@ -1342,7 +1342,20 @@ Alpine.data('choreo', () => ({
   },
 
   /* ===================== Playback-Controls ===================== */
-  togglePlay() { if (ws) ws.playPause(); },
+  // Grid/Lanes-Overlay frisch an die echten Wellenmaße anpassen (gegen Desync)
+  recalibrate() {
+    if (!ws) return;
+    this.resizeGridCanvas();
+    this.resizeLaneCanvas();
+    this.recomputeViewport();
+    this.scheduleDraw();
+  },
+  togglePlay() {
+    if (!ws) return;
+    this.recalibrate();                                    // vor dem Start neu vermessen
+    ws.playPause();
+    requestAnimationFrame(() => this.recalibrate());       // nach dem Layout nochmal
+  },
   seekTo(t) { if (ws && this.duration) ws.setTime(Number(t)); },
   zoomIn() { this.zoom = Math.min(400, (this.zoom || 20) * 1.6); if (ws) ws.zoom(this.zoom); },
   zoomOut() { this.zoom = Math.max(1, (this.zoom || 20) / 1.6); if (ws) ws.zoom(this.zoom); },
