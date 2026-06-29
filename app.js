@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 21;
+const APP_VERSION = 22;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -1089,6 +1089,24 @@ Alpine.data('choreo', () => ({
       if (showText && st.value) { laneCtx.fillStyle = '#e8e8e8'; laneCtx.fillText(st.value, x + 7, cy); }
     }
     laneCtx.globalAlpha = 1;
+
+    // Abschnitt-Grenzen: kleine Dreiecke an der Unterlinie (Spitze nach oben)
+    const bottom = y0 + laneH;
+    laneCtx.fillStyle = '#8ab4ff';
+    for (const part of this.sortedParts) {
+      const bounds = [Number(part.start_sec) || 0];
+      if (part.end_sec != null) bounds.push(Number(part.end_sec));
+      for (const bt of bounds) {
+        if (bt < startT - 0.001 || bt > endT + 0.001) continue;
+        const x = (bt - startT) * pxPerSec;
+        laneCtx.beginPath();
+        laneCtx.moveTo(x, bottom - 7);
+        laneCtx.lineTo(x - 5, bottom);
+        laneCtx.lineTo(x + 5, bottom);
+        laneCtx.closePath();
+        laneCtx.fill();
+      }
+    }
   },
 
   /* ===================== Lanes: Tippen / Halten ===================== */
