@@ -313,14 +313,43 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   flex-shrink: 0;
 }
 .segment .label-input { flex: 1; padding: 5px 10px; font-size: 14px; font-weight: 600; }
+.segment .ts.ts-play { display: inline-flex; align-items: center; gap: 4px; }
+.segment .ts.ts-play svg { display: block; }
 .segment textarea.notes.auto {
-  min-height: 0; height: auto; overflow: hidden; resize: none;
-  font-size: 13px; line-height: 1.35; padding: 5px 10px; margin-top: 6px;
+  min-height: 38px; height: auto; overflow: hidden; resize: none;
+  font-size: 14px; line-height: 1.4; padding: 7px 10px; margin-top: 6px; width: 100%;
 }
-.segment .label-input[readonly], .segment textarea[readonly] {
+.segment .label-input[readonly] {
   background: transparent; border-color: transparent; padding-left: 2px;
 }
-.segment textarea[readonly] { color: #d8d8d8; }
+/* Beschreibung im Training: lesbar, ohne Rahmen, voller Text sichtbar */
+.segment textarea[readonly] { color: #d8d8d8; background: transparent; border-color: transparent; }
+
+/* aktiver Marker-Toggle in der Leiste */
+#controls-bar .icon.on { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+
+/* Gruppen-Verlauf für das gewählte Paar */
+.grp-flow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.grp-step {
+  font-size: 12px; padding: 3px 9px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+}
+.grp-step.now { background: var(--accent); color: #0b1020; font-weight: 700; border-color: var(--accent); }
+
+/* Legende (Schritte-Tab) */
+.legend {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 10px; margin-bottom: 12px; font-size: 12px; color: var(--muted);
+}
+.legend-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.legend-row + .legend-row { margin-top: 6px; }
+.lg-tag {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 5px;
+  background: var(--accent-dim); color: var(--accent); font-weight: 700; font-size: 11px;
+}
+.lg-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.lg-dim { color: #6b7180; }
 
 /* ===== Off-Canvas Menü & Modals ===== */
 .scrim {

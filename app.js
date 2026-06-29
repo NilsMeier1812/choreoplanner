@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 22;
+const APP_VERSION = 23;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -132,6 +132,7 @@ Alpine.data('choreo', () => ({
   editGroup: 0,                     // neue Schritte gehören zu dieser Gruppe (0 = alle)
   noteModalOpen: false,             // Popup zum Eintragen einer Notiz
   noteText: '',
+  showMarkers: true,                // Sprungmarken in der Wellen-Anzeige zeigen
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -211,6 +212,28 @@ Alpine.data('choreo', () => ({
     if (!this.myPersonNumber) return 0;
     return this.groupOf(this.activePart, this.myPersonNumber);
   },
+  // Verlauf der Gruppen für das gewählte Paar über das ganze Lied
+  // -> z.B. ["Links", "Alle gleich", "Mitte", "Alle gleich", "Vorne"]
+  get myGroupTimeline() {
+    if (!this.myPersonNumber) return [];
+    const dur = this.duration || 0;
+    const out = [];
+    let cursor = 0;
+    for (const p of this.sortedParts) {
+      const ps = Number(p.start_sec) || 0;
+      const pe = p.end_sec == null ? dur : Number(p.end_sec);
+      if (ps > cursor + 0.05) out.push('Alle gleich');            // Lücke davor
+      const g = this.groupOf(p, this.myPersonNumber);
+      out.push(g ? this.groupNameOf(p, g) : 'Alle gleich');
+      cursor = Math.max(cursor, pe);
+    }
+    if (!this.sortedParts.length || cursor < dur - 0.05) out.push('Alle gleich');  // Rest
+    // aufeinanderfolgende Gleiche zusammenfassen
+    const merged = [];
+    for (const x of out) if (merged[merged.length - 1] !== x) merged.push(x);
+    return merged;
+  },
+  autoGrow(el) { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } },
 
   /* ===================== Init ===================== */
   async init() {
@@ -1090,12 +1113,24 @@ Alpine.data('choreo', () => ({
     }
     laneCtx.globalAlpha = 1;
 
-    // Abschnitt-Grenzen: kleine Dreiecke an der Unterlinie (Spitze nach oben)
+    // Abschnitt-Grenzen: leichte blaue Linie zwischen Start/Ende + Dreiecke (Spitze hoch)
     const bottom = y0 + laneH;
-    laneCtx.fillStyle = '#8ab4ff';
+    const dur = ws.getDuration() || 0;
     for (const part of this.sortedParts) {
-      const bounds = [Number(part.start_sec) || 0];
-      if (part.end_sec != null) bounds.push(Number(part.end_sec));
+      const ps = Number(part.start_sec) || 0;
+      const pe = part.end_sec == null ? dur : Number(part.end_sec);
+      // dünne, dezent blaue Linie entlang der Unterkante
+      const lx0 = (Math.max(ps, startT) - startT) * pxPerSec;
+      const lx1 = (Math.min(pe, endT) - startT) * pxPerSec;
+      if (lx1 > lx0) {
+        laneCtx.strokeStyle = 'rgba(138,180,255,0.4)';
+        laneCtx.lineWidth = 2;
+        laneCtx.beginPath(); laneCtx.moveTo(lx0, bottom - 1); laneCtx.lineTo(lx1, bottom - 1); laneCtx.stroke();
+      }
+      // Dreiecke an Start und Ende
+      laneCtx.fillStyle = '#8ab4ff';
+      const bounds = [ps];
+      if (part.end_sec != null) bounds.push(pe);
       for (const bt of bounds) {
         if (bt < startT - 0.001 || bt > endT + 0.001) continue;
         const x = (bt - startT) * pxPerSec;
@@ -1352,6 +1387,7 @@ Alpine.data('choreo', () => ({
   renderRegions() {
     if (!wsRegions) return;
     wsRegions.clearRegions();
+    if (!this.showMarkers) return;                 // Sprungmarken ausgeblendet
     const draggable = this.currentMode === 'editor';
     for (const s of this.sortedSegments) {
       wsRegions.addRegion({
@@ -1364,6 +1400,7 @@ Alpine.data('choreo', () => ({
       });
     }
   },
+  toggleMarkers() { this.showMarkers = !this.showMarkers; this.renderRegions(); },
 
   onRegionMoved(r) {
     const seg = this.segments.find(s => s.id === r.id);

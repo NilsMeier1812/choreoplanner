@@ -35,7 +35,7 @@
         <button :class="{ active: currentMode === 'training' }"
                 @click="currentMode === 'editor' && toggleMode()">Training</button>
         <button :class="{ active: currentMode === 'editor' }"
-                @click="currentMode === 'training' && toggleMode()">Editor<span x-show="!isEditor"> 🔒</span></button>
+                @click="currentMode === 'training' && toggleMode()">Editor<span x-show="!isEditor"> <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span></button>
       </div>
     </div>
 
@@ -76,6 +76,9 @@
       <button :class="{ active: stepDisplay === 'letters' }" @click="setStepDisplay('letters')" title="Buchstaben">L u S</button>
     </div>
     <span class="spacer"></span>
+    <button class="icon" :class="{ on: showMarkers }" @click="toggleMarkers()" :disabled="!project" aria-label="Sprungmarken in der Welle ein/aus" title="Sprungmarken in der Welle">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>
+    </button>
     <button class="icon" @click="zoomOut()" :disabled="!project" aria-label="Verkleinern">−</button>
     <button class="icon" @click="zoomIn()" :disabled="!project" aria-label="Vergrößern">+</button>
     <button x-show="currentMode === 'editor'" class="mark-btn primary" @click="addSegmentAtCursor()">
@@ -116,20 +119,23 @@
         <template x-for="seg in sortedSegments" :key="seg.id">
           <div class="segment" :id="'seg-' + seg.id" :class="{ active: seg.id === activeSegmentId }">
             <div class="row">
-              <button class="ts barback" @click="seekBarBefore(seg.timestamp)" title="Einen Takt vorher starten">⟲ Takt</button>
-              <button class="ts" @click="seekTo(seg.timestamp)" x-text="fmt(seg.timestamp)"></button>
+              <button class="ts barback" @click="seekBarBefore(seg.timestamp)" title="Einen Takt vorher starten">-1 Takt</button>
+              <button class="ts ts-play" @click="seekTo(seg.timestamp)" title="Zur Sprungmarke">
+                <svg viewBox="0 0 24 24" width="11" height="11" aria-hidden="true"><path d="M8 5v14l11-7z" fill="currentColor"/></svg>
+                <span x-text="fmt(seg.timestamp)"></span>
+              </button>
               <input class="label-input" type="text" placeholder="Label (z.B. Hebung)"
                      :readonly="currentMode !== 'editor'"
                      :value="seg.label"
                      @input="onSegmentInput(seg, 'label', $event.target.value)" />
               <button x-show="currentMode === 'editor'" class="icon danger" @click="deleteSegment(seg)" aria-label="Löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
             </div>
-            <!-- Notiz-Textfeld nur im Editor oder wenn Text vorhanden; wächst mit Inhalt -->
-            <textarea x-show="currentMode === 'editor' || seg.notes" class="notes auto" placeholder="Notiz…" rows="1"
+            <!-- Beschreibung: im Editor immer, im Training nur wenn Text vorhanden; wächst mit Inhalt -->
+            <textarea x-show="currentMode === 'editor' || seg.notes" class="notes auto" placeholder="Beschreibung…" rows="2"
                       :readonly="currentMode !== 'editor'"
                       :value="seg.notes"
-                      x-init="$nextTick(() => { $el.style.height='auto'; $el.style.height=$el.scrollHeight+'px'; })"
-                      @input="$el.style.height='auto'; $el.style.height=$el.scrollHeight+'px'; onSegmentInput(seg, 'notes', $event.target.value)"></textarea>
+                      x-effect="seg.notes, bottomTab, $nextTick(() => autoGrow($el))"
+                      @input="onSegmentInput(seg, 'notes', $event.target.value); autoGrow($el)"></textarea>
           </div>
         </template>
       </div>
@@ -138,7 +144,7 @@
       <div x-show="bottomTab === 'steps'" class="tab-pane">
 
         <!-- Paar-Auswahl: bestimmt, welche Schritte in den Spuren gezeigt werden -->
-        <div class="field" style="margin-bottom:10px">
+        <div class="field" style="margin-bottom:12px">
           <label>Ich bin Paar</label>
           <select :value="myPersonNumber" @change="setMyPerson($event.target.value)">
             <option value="0">— Paar wählen —</option>
@@ -146,16 +152,28 @@
               <option :value="p.number" x-text="'Paar ' + p.number + (p.name ? ' (' + p.name + ')' : '')"></option>
             </template>
           </select>
-          <template x-if="myPersonNumber && activePart">
-            <p class="hint" style="margin-top:6px">Aktuell (<span x-text="activePart.label"></span>): <strong x-text="myGroup ? groupNameOf(activePart, myGroup) : 'keine Gruppe / alle gleich'"></strong></p>
+          <template x-if="myPersonNumber && myGroupTimeline.length">
+            <div class="grp-flow">
+              <template x-for="(g, i) in myGroupTimeline" :key="i">
+                <span class="grp-step" :class="{ now: activePart && g === (myGroup ? groupNameOf(activePart, myGroup) : 'Alle gleich') }" x-text="g"></span>
+              </template>
+            </div>
           </template>
         </div>
 
-        <p class="hint">
-          Spuren oben: <strong>L</strong> = Leader, <strong>F</strong> = Follower, unten = Notizen &nbsp;·&nbsp;
-          <span style="color:#6c8cff">●</span> linker Fuß <span style="color:#ff5a5a">●</span> rechter Fuß &nbsp;·&nbsp;
-          Anzeige oben in der Leiste umschaltbar.
-        </p>
+        <!-- Legende -->
+        <div class="legend">
+          <div class="legend-row">
+            <span class="lg-tag">L</span> Leader-Spur
+            <span class="lg-tag">F</span> Follower-Spur
+            <span class="lg-dim">· unterste Spur = Notizen</span>
+          </div>
+          <div class="legend-row">
+            <span class="lg-dot" style="background:#6c8cff"></span> linker Fuß
+            <span class="lg-dot" style="background:#ff5a5a"></span> rechter Fuß
+            <span class="lg-dim">· Anzeige oben in der Leiste umschaltbar</span>
+          </div>
+        </div>
 
         <template x-if="!isEditor">
           <p class="empty">Zum Eintragen/Einrichten als Editor anmelden.</p>
@@ -190,13 +208,13 @@
                   <div style="flex:1"><label>Start (s)</label>
                     <div class="calib-row" style="margin:0;gap:6px">
                       <input type="number" step="0.001" min="0" :value="part.start_sec" @change="setPartBound(part,'start_sec',$event.target.value)" />
-                      <button class="icon" @click="partBoundToCursor(part,'start_sec')" title="auf Abspielposition">🎯</button>
+                      <button class="icon" @click="partBoundToCursor(part,'start_sec')" title="auf Abspielposition"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
                     </div>
                   </div>
                   <div style="flex:1"><label>Ende (s)</label>
                     <div class="calib-row" style="margin:0;gap:6px">
                       <input type="number" step="0.001" min="0" :value="part.end_sec ?? ''" placeholder="Schluss" @change="setPartBound(part,'end_sec',$event.target.value)" />
-                      <button class="icon" @click="partBoundToCursor(part,'end_sec')" title="auf Abspielposition">🎯</button>
+                      <button class="icon" @click="partBoundToCursor(part,'end_sec')" title="auf Abspielposition"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
                     </div>
                   </div>
                 </div>
@@ -257,10 +275,10 @@
           <!-- Editor-Status / Login -->
           <div class="editor-bar">
             <template x-if="isEditor">
-              <div class="eb-row"><span class="eb-on">✏️ Editor aktiv</span><button @click="logout()">Abmelden</button></div>
+              <div class="eb-row"><span class="eb-on"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg> Editor aktiv</span><button @click="logout()">Abmelden</button></div>
             </template>
             <template x-if="!isEditor">
-              <div class="eb-row"><span class="eb-off">🔒 Nur Lesen</span><button class="primary" @click="openLogin()">Editor anmelden</button></div>
+              <div class="eb-row"><span class="eb-off"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg> Nur Lesen</span><button class="primary" @click="openLogin()">Editor anmelden</button></div>
             </template>
           </div>
 
@@ -361,7 +379,7 @@
                   <div class="calib-row" style="margin:0;gap:6px">
                     <input type="number" step="0.001" min="0" :value="sec.start_sec"
                            @change="setTempoBound(sec,'start_sec',$event.target.value)" />
-                    <button class="icon" @click="boundToCursor(sec,'start_sec')" title="auf Abspielposition">🎯</button>
+                    <button class="icon" @click="boundToCursor(sec,'start_sec')" title="auf Abspielposition"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
                   </div>
                 </div>
                 <div style="flex:1">
@@ -369,7 +387,7 @@
                   <div class="calib-row" style="margin:0;gap:6px">
                     <input type="number" step="0.001" min="0" :value="sec.end_sec ?? ''" placeholder="Schluss"
                            @change="setTempoBound(sec,'end_sec',$event.target.value)" />
-                    <button class="icon" @click="boundToCursor(sec,'end_sec')" title="auf Abspielposition">🎯</button>
+                    <button class="icon" @click="boundToCursor(sec,'end_sec')" title="auf Abspielposition"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg></button>
                   </div>
                 </div>
               </div>
@@ -408,8 +426,8 @@
                 <button class="icon" @click="nudgeOffset(sec,0.05)">+50ms</button>
               </div>
               <div class="calib-row">
-                <button style="flex:1" @click="offsetToCursor(sec)">🎯 auf Abspielposition</button>
-                <button @click="resetOffset(sec)">⟲ Reset</button>
+                <button style="flex:1" @click="offsetToCursor(sec)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg> auf Abspielposition</button>
+                <button @click="resetOffset(sec)"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg> Reset</button>
               </div>
             </div>
           </template>
@@ -431,7 +449,7 @@
     <div>
       <div class="scrim"></div>
       <div class="modal">
-        <header><h2>Willkommen 🎵</h2></header>
+        <header><h2>Willkommen</h2></header>
         <div class="body">
           <p style="margin-top:0;color:var(--muted);font-size:14px">
             Sag uns deinen Namen – so sehen Mitnutzer, wer ein Projekt gerade bearbeitet.
@@ -448,14 +466,16 @@
     <div>
       <div class="scrim" @click="closeLogin()"></div>
       <div class="modal">
-        <header><h2>Editor anmelden 🔒</h2><button class="icon" @click="closeLogin()" aria-label="Schließen">✕</button></header>
+        <header><h2>Editor anmelden <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></h2><button class="icon" @click="closeLogin()" aria-label="Schließen">✕</button></header>
         <div class="body">
           <p class="hint">Bearbeiten ist nur mit dem gemeinsamen Editor-Passwort möglich. Ansehen &amp; Training geht für alle ohne Login.</p>
           <div class="pw-row">
             <input :type="showPw ? 'text' : 'password'" x-model="loginPassword" placeholder="Editor-Passwort"
                    autocomplete="current-password" @keydown.enter="doLogin()" />
-            <button type="button" class="icon" @click="showPw = !showPw"
-                    :aria-label="showPw ? 'Passwort verbergen' : 'Passwort anzeigen'" x-text="showPw ? '🙈' : '👁'"></button>
+            <button type="button" class="icon" @click="showPw = !showPw" :aria-label="showPw ? 'Passwort verbergen' : 'Passwort anzeigen'">
+              <svg x-show="!showPw" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg x-show="showPw" x-cloak viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12A3 3 0 1 1 9.88 9.88"/><path d="M1 1l22 22"/></svg>
+            </button>
           </div>
           <div x-show="loginError" style="color:var(--danger);font-size:13px;margin-top:8px" x-text="loginError"></div>
           <button class="primary" style="width:100%;margin-top:12px"
