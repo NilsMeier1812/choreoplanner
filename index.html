@@ -54,12 +54,14 @@
           <button class="primary" style="margin-top:10px" @click="menuOpen = true">Projekt wählen</button>
         </div>
       </div>
+      <div class="playhead" id="ph-wave"></div>
     </div>
 
     <!-- mitlaufende Schritt-Lanes (Canvas wird per JS eingehängt) -->
     <div id="lanes">
       <span class="lane-label lane-h">L</span>
       <span class="lane-label lane-d">F</span>
+      <div class="playhead" id="ph-lane"></div>
     </div>
   </section>
 
@@ -283,8 +285,8 @@
           </div>
 
           <!-- Audio-Versatz (pro Gerät, gegen Ton-Ausgabe-Latenz) -->
-          <div class="section-title">Audio-Versatz</div>
-          <p class="hint">Wenn der Ton dem Raster voraus-/nachläuft (z.B. Bluetooth/Handy): so justieren, dass der Schlag genau auf der Taktlinie liegt. Wird pro Gerät gespeichert.</p>
+          <div class="section-title">Audio-Versatz (Feinabgleich)</div>
+          <p class="hint">Nur falls Ton und Playhead minimal auseinanderliegen: <strong>−</strong> schiebt den Playhead nach vorne (wenn der Ton voraus ist), <strong>+</strong> nach hinten. Wird pro Gerät gespeichert.</p>
           <div class="calib-row">
             <button class="icon" @click="nudgeSync(-50)">−50</button>
             <button class="icon" @click="nudgeSync(-10)">−10</button>

@@ -124,6 +124,13 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
   pointer-events: none;
   z-index: 4;
 }
+/* Playhead als leichtes DOM-Element (nur GPU-transform -> immer flüssig) */
+.playhead {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 2px;
+  background: rgba(255,255,255,0.95);
+  pointer-events: none; z-index: 6; display: none;
+  will-change: transform; transform: translateX(-10px);
+}
 #waveform .loading-overlay {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center;

@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 26;
+const APP_VERSION = 27;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -58,6 +58,7 @@ let gridCanvas = null;             // eigenes Beat-Grid (Overlay über dem Wavef
 let gridCtx = null;
 let laneCanvas = null;             // Schritt-Lanes (Herren/Damen) unter der Welle
 let laneCtx = null;
+let phWave = null, phLane = null;  // Playhead-DOM-Elemente (Welle + Spuren)
 let drawRaf = 0;                   // EINE rAF-Drossel für Grid + Lanes (gegen Ruckeln)
 let cachedPxPerSec = 0;            // Pixel/Sekunde – nur bei Zoom/Resize neu berechnet
 const lastFoot = { herren: null, damen: null };  // für Auto-Fußwechsel beim Eintragen
@@ -521,6 +522,8 @@ Alpine.data('choreo', () => ({
     // eigenes Beat-Grid als Overlay-Canvas (Multi-Tempo) + Schritt-Lanes
     this.setupGridCanvas(container);
     this.setupLaneCanvas(document.getElementById('lanes'));
+    phWave = document.getElementById('ph-wave');
+    phLane = document.getElementById('ph-lane');
 
     // 'ready'/'decode' sind die verlässlichen Signale (das load()-Promise kann hängen)
     ws.on('ready', () => this.onAudioReady());
@@ -528,7 +531,7 @@ Alpine.data('choreo', () => ({
     ws.on('play', () => { this.isPlaying = true; this.recalibrate(); this.startPlayLoop(); });
     ws.on('pause', () => { this.isPlaying = false; this.stopPlayLoop(); });
     ws.on('finish', () => { this.isPlaying = false; this.stopPlayLoop(); });
-    ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.scheduleDraw(); });
+    ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.updatePlayhead(); });
     ws.on('error', (err) => this.handleAudioError(err));
     // Grid + Lanes an Scroll/Zoom/Redraw koppeln. 'scroll' liefert den exakten
     // Sichtbereich (gleicher Bezug wie die Welle) -> kein Versatz Anzeige/Musik.
@@ -593,10 +596,24 @@ Alpine.data('choreo', () => ({
       const vp = this.gridViewport();
       this.drawGrid(vp);
       this.drawLanes(vp);
+      this.updatePlayhead(vp);
     });
   },
   scheduleGridDraw() { this.scheduleDraw(); },
   scheduleLaneDraw() { this.scheduleDraw(); },
+  // Playhead nur per GPU-transform verschieben (kein Canvas-Redraw -> immer flüssig)
+  updatePlayhead(vp) {
+    if (vp === undefined) vp = this.gridViewport();
+    if (!phWave && !phLane) return;
+    const w = gridCanvas ? gridCanvas.clientWidth : 0;
+    let x = null;
+    if (vp) { const px = (this.phTime() - vp.startT) * vp.pxPerSec; if (px >= 0 && px <= w) x = px; }
+    for (const el of [phWave, phLane]) {
+      if (!el) continue;
+      if (x == null) { el.style.display = 'none'; }
+      else { el.style.display = 'block'; el.style.transform = `translateX(${x}px)`; }
+    }
+  },
 
   // Zeichnet pro Tempo-Abschnitt das Beat-Raster (Takt 1 dick, Beats dünn).
   // Lücken zwischen Abschnitten bleiben leer.
@@ -649,14 +666,6 @@ Alpine.data('choreo', () => ({
           gridCtx.fillText(String(Math.floor(k / bpb) + 1), x + 3, 2);
         }
       }
-    }
-
-    // eigener Playhead (berücksichtigt Audio-Versatz)
-    const px = (this.phTime() - startT) * pxPerSec;
-    if (px >= -1 && px <= w + 1) {
-      gridCtx.strokeStyle = 'rgba(255,255,255,0.95)';
-      gridCtx.lineWidth = 2;
-      gridCtx.beginPath(); gridCtx.moveTo(px, 0); gridCtx.lineTo(px, h); gridCtx.stroke();
     }
   },
 
@@ -1066,12 +1075,6 @@ Alpine.data('choreo', () => ({
     this.drawLaneSteps('damen', laneH, laneH, startT, pxPerSec, endT);
     this.drawNoteLane(2 * laneH, laneH, startT, pxPerSec, endT);
 
-    // Playhead über alle Spuren (berücksichtigt Audio-Versatz)
-    const px = (this.phTime() - startT) * pxPerSec;
-    if (px >= 0 && px <= w) {
-      laneCtx.strokeStyle = 'rgba(255,255,255,0.9)'; laneCtx.lineWidth = 2;
-      laneCtx.beginPath(); laneCtx.moveTo(px, 0); laneCtx.lineTo(px, h); laneCtx.stroke();
-    }
   },
   drawLaneSteps(role, y0, laneH, startT, pxPerSec, endT) {
     const cy = y0 + laneH / 2;
@@ -1352,6 +1355,8 @@ Alpine.data('choreo', () => ({
     if (ws) { try { ws.destroy(); } catch (e) {} ws = null; wsRegions = null; }
     if (gridCanvas) { try { gridCanvas.remove(); } catch (e) {} gridCanvas = null; gridCtx = null; }
     if (laneCanvas) { try { laneCanvas.remove(); } catch (e) {} laneCanvas = null; laneCtx = null; }
+    if (phWave) phWave.style.display = 'none';
+    if (phLane) phLane.style.display = 'none';
     if (currentObjectUrl) { URL.revokeObjectURL(currentObjectUrl); currentObjectUrl = null; }
   },
 
@@ -1376,8 +1381,8 @@ Alpine.data('choreo', () => ({
     if (this._playRaf) return;
     const step = () => {
       if (!ws || !this.isPlaying) { this._playRaf = 0; return; }
-      this.onTimeUpdate(ws.getCurrentTime());
-      this.scheduleDraw();
+      this.currentTime = ws.getCurrentTime();
+      this.updatePlayhead();                 // nur Playhead bewegen (flüssig, kein Redraw)
       this._playRaf = requestAnimationFrame(step);
     };
     this._playRaf = requestAnimationFrame(step);
@@ -1390,11 +1395,11 @@ Alpine.data('choreo', () => ({
   // sichtbare Playhead-Zeit = Abspielzeit minus Audio-Versatz (Ausgabe-Latenz)
   phTime() { return Math.max(0, this.currentTime - (Number(this.syncOffset) || 0) / 1000); },
   nudgeSync(d) {
-    this.syncOffset = Math.max(-500, Math.min(2000, (Number(this.syncOffset) || 0) + d));
+    this.syncOffset = Math.max(-2000, Math.min(2000, (Number(this.syncOffset) || 0) + d));
     localStorage.setItem('choreo_sync_offset', this.syncOffset);
-    this.scheduleDraw();
+    this.updatePlayhead();
   },
-  resetSync() { this.syncOffset = 0; localStorage.setItem('choreo_sync_offset', 0); this.scheduleDraw(); },
+  resetSync() { this.syncOffset = 0; localStorage.setItem('choreo_sync_offset', 0); this.updatePlayhead(); },
   seekTo(t) { if (ws && this.duration) ws.setTime(Number(t)); },
   zoomIn() { this.zoom = Math.min(400, (this.zoom || 20) * 1.6); if (ws) ws.zoom(this.zoom); },
   zoomOut() { this.zoom = Math.max(1, (this.zoom || 20) / 1.6); if (ws) ws.zoom(this.zoom); },
