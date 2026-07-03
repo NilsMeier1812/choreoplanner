@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 25;
+const APP_VERSION = 26;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -133,6 +133,7 @@ Alpine.data('choreo', () => ({
   noteModalOpen: false,             // Popup zum Eintragen einer Notiz
   noteText: '',
   showMarkers: true,                // Sprungmarken in der Wellen-Anzeige zeigen
+  syncOffset: 0,                    // Audio-Versatz in ms (pro Gerät, gegen Ausgabe-Latenz)
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -247,6 +248,7 @@ Alpine.data('choreo', () => ({
       const u = uuid(); localStorage.setItem('choreo_user_id', u); return u;
     })();
     this.userName = localStorage.getItem('choreo_user_name') || '';
+    this.syncOffset = Number(localStorage.getItem('choreo_sync_offset')) || 0;
     if (!this.userName) this.nameModalOpen = true;
 
     // Netz-Listener
@@ -507,8 +509,7 @@ Alpine.data('choreo', () => ({
       height: h,
       waveColor: '#5a5a5a',
       progressColor: '#6c8cff',
-      cursorColor: '#ffffff',
-      cursorWidth: 2,
+      cursorWidth: 0,                 // eigener Playhead (mit Audio-Versatz) auf dem Canvas
       barWidth: 2,
       barGap: 1,
       barRadius: 2,
@@ -524,9 +525,9 @@ Alpine.data('choreo', () => ({
     // 'ready'/'decode' sind die verlässlichen Signale (das load()-Promise kann hängen)
     ws.on('ready', () => this.onAudioReady());
     ws.on('decode', () => this.onAudioReady());
-    ws.on('play', () => { this.isPlaying = true; this.recalibrate(); });
-    ws.on('pause', () => { this.isPlaying = false; });
-    ws.on('finish', () => { this.isPlaying = false; });
+    ws.on('play', () => { this.isPlaying = true; this.recalibrate(); this.startPlayLoop(); });
+    ws.on('pause', () => { this.isPlaying = false; this.stopPlayLoop(); });
+    ws.on('finish', () => { this.isPlaying = false; this.stopPlayLoop(); });
     ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.scheduleDraw(); });
     ws.on('error', (err) => this.handleAudioError(err));
     // Grid + Lanes an Scroll/Zoom/Redraw koppeln. 'scroll' liefert den exakten
@@ -648,6 +649,14 @@ Alpine.data('choreo', () => ({
           gridCtx.fillText(String(Math.floor(k / bpb) + 1), x + 3, 2);
         }
       }
+    }
+
+    // eigener Playhead (berücksichtigt Audio-Versatz)
+    const px = (this.phTime() - startT) * pxPerSec;
+    if (px >= -1 && px <= w + 1) {
+      gridCtx.strokeStyle = 'rgba(255,255,255,0.95)';
+      gridCtx.lineWidth = 2;
+      gridCtx.beginPath(); gridCtx.moveTo(px, 0); gridCtx.lineTo(px, h); gridCtx.stroke();
     }
   },
 
@@ -1057,8 +1066,8 @@ Alpine.data('choreo', () => ({
     this.drawLaneSteps('damen', laneH, laneH, startT, pxPerSec, endT);
     this.drawNoteLane(2 * laneH, laneH, startT, pxPerSec, endT);
 
-    // Playhead über alle Spuren
-    const px = (this.currentTime - startT) * pxPerSec;
+    // Playhead über alle Spuren (berücksichtigt Audio-Versatz)
+    const px = (this.phTime() - startT) * pxPerSec;
     if (px >= 0 && px <= w) {
       laneCtx.strokeStyle = 'rgba(255,255,255,0.9)'; laneCtx.lineWidth = 2;
       laneCtx.beginPath(); laneCtx.moveTo(px, 0); laneCtx.lineTo(px, h); laneCtx.stroke();
@@ -1336,6 +1345,7 @@ Alpine.data('choreo', () => ({
   },
 
   destroyWs() {
+    if (this._playRaf) { cancelAnimationFrame(this._playRaf); this._playRaf = 0; }
     if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
     if (drawRaf) { cancelAnimationFrame(drawRaf); drawRaf = 0; }
     cachedPxPerSec = 0;
@@ -1360,6 +1370,31 @@ Alpine.data('choreo', () => ({
     ws.playPause();
     requestAnimationFrame(() => this.recalibrate());       // nach dem Layout nochmal
   },
+  // Playhead pro Frame mit der ECHTEN Zeit treiben (statt nur per 'timeupdate',
+  // das auf manchen Browsern nur ~4x/s feuert -> würde ~½ Beat nachhängen).
+  startPlayLoop() {
+    if (this._playRaf) return;
+    const step = () => {
+      if (!ws || !this.isPlaying) { this._playRaf = 0; return; }
+      this.onTimeUpdate(ws.getCurrentTime());
+      this.scheduleDraw();
+      this._playRaf = requestAnimationFrame(step);
+    };
+    this._playRaf = requestAnimationFrame(step);
+  },
+  stopPlayLoop() {
+    if (this._playRaf) { cancelAnimationFrame(this._playRaf); this._playRaf = 0; }
+    if (ws) this.currentTime = ws.getCurrentTime();        // exakte Endposition
+    this.scheduleDraw();
+  },
+  // sichtbare Playhead-Zeit = Abspielzeit minus Audio-Versatz (Ausgabe-Latenz)
+  phTime() { return Math.max(0, this.currentTime - (Number(this.syncOffset) || 0) / 1000); },
+  nudgeSync(d) {
+    this.syncOffset = Math.max(-500, Math.min(2000, (Number(this.syncOffset) || 0) + d));
+    localStorage.setItem('choreo_sync_offset', this.syncOffset);
+    this.scheduleDraw();
+  },
+  resetSync() { this.syncOffset = 0; localStorage.setItem('choreo_sync_offset', 0); this.scheduleDraw(); },
   seekTo(t) { if (ws && this.duration) ws.setTime(Number(t)); },
   zoomIn() { this.zoom = Math.min(400, (this.zoom || 20) * 1.6); if (ws) ws.zoom(this.zoom); },
   zoomOut() { this.zoom = Math.max(1, (this.zoom || 20) / 1.6); if (ws) ws.zoom(this.zoom); },

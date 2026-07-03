@@ -282,6 +282,18 @@
             </template>
           </div>
 
+          <!-- Audio-Versatz (pro Gerät, gegen Ton-Ausgabe-Latenz) -->
+          <div class="section-title">Audio-Versatz</div>
+          <p class="hint">Wenn der Ton dem Raster voraus-/nachläuft (z.B. Bluetooth/Handy): so justieren, dass der Schlag genau auf der Taktlinie liegt. Wird pro Gerät gespeichert.</p>
+          <div class="calib-row">
+            <button class="icon" @click="nudgeSync(-50)">−50</button>
+            <button class="icon" @click="nudgeSync(-10)">−10</button>
+            <span class="calib-val" x-text="syncOffset + ' ms'"></span>
+            <button class="icon" @click="nudgeSync(10)">+10</button>
+            <button class="icon" @click="nudgeSync(50)">+50</button>
+          </div>
+          <button style="width:100%;margin:2px 0 4px" @click="resetSync()">auf 0 zurücksetzen</button>
+
           <template x-for="p in projects" :key="p.id">
             <div class="project-item" :class="{ active: project && p.id === project.id }" @click="openProject(p)">
               <div class="pi-main">
