@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 27;
+const APP_VERSION = 28;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -531,7 +531,9 @@ Alpine.data('choreo', () => ({
     ws.on('play', () => { this.isPlaying = true; this.recalibrate(); this.startPlayLoop(); });
     ws.on('pause', () => { this.isPlaying = false; this.stopPlayLoop(); });
     ws.on('finish', () => { this.isPlaying = false; this.stopPlayLoop(); });
-    ws.on('timeupdate', (t) => { this.onTimeUpdate(t); this.updatePlayhead(); });
+    // Beim Abspielen treibt die Interpolations-Uhr (startPlayLoop) den Playhead
+    // flüssig; timeupdate liefert dann nur den groben Anker + Segment-Logik.
+    ws.on('timeupdate', (t) => { this.onTimeUpdate(t); if (!this.isPlaying) this.updatePlayhead(); });
     ws.on('error', (err) => this.handleAudioError(err));
     // Grid + Lanes an Scroll/Zoom/Redraw koppeln. 'scroll' liefert den exakten
     // Sichtbereich (gleicher Bezug wie die Welle) -> kein Versatz Anzeige/Musik.
@@ -1375,13 +1377,39 @@ Alpine.data('choreo', () => ({
     ws.playPause();
     requestAnimationFrame(() => this.recalibrate());       // nach dem Layout nochmal
   },
-  // Playhead pro Frame mit der ECHTEN Zeit treiben (statt nur per 'timeupdate',
-  // das auf manchen Browsern nur ~4x/s feuert -> würde ~½ Beat nachhängen).
+  // --- Interpolations-Uhr gegen den ~½-Beat-Versatz -------------------------
+  // media.currentTime aktualisiert in vielen Browsern nur grob (~alle 250ms in
+  // Stufen). Pro Frame auslesen hilft nicht: der Wert bleibt stehen und springt
+  // dann -> der Playhead hinkt der echten Wiedergabe bis zu ~250ms (≈½ Beat bei
+  // 120 BPM) hinterher, der Ton klingt „zu früh". Lösung: zwischen den groben
+  // Media-Samples mit performance.now() interpolieren und den Anker neu setzen,
+  // sobald die Media-Zeit einen frischen Wert meldet.
+  _syncClock(mt) {
+    const now = performance.now();
+    const est = (this._clkP != null) ? this._clkT + (now - this._clkP) / 1000 : mt;
+    if (this._clkP == null || mt < this._clkT - 1e-3 || Math.abs(est - mt) > 0.15) {
+      this._clkT = mt; this._clkP = now;                   // Seek / großer Sprung -> hart neu
+    } else {
+      this._clkT = mt + (est - mt) * 0.5; this._clkP = now; // kleine Drift sanft ausgleichen
+    }
+  },
+  _clockNow() {
+    if (this._clkP == null) return this.currentTime;
+    const pos = this._clkT + (performance.now() - this._clkP) / 1000;
+    const dur = this.duration || (ws ? ws.getDuration() : 0) || 0;
+    return dur ? Math.min(pos, dur) : pos;
+  },
+  // Playhead pro Frame mit der interpolierten Zeit treiben (glatt + ohne Nachhang).
   startPlayLoop() {
     if (this._playRaf) return;
+    this._clkP = null;
+    let lastMt = ws ? ws.getCurrentTime() : 0;
+    this._syncClock(lastMt);
     const step = () => {
       if (!ws || !this.isPlaying) { this._playRaf = 0; return; }
-      this.currentTime = ws.getCurrentTime();
+      const mt = ws.getCurrentTime();
+      if (mt !== lastMt) { lastMt = mt; this._syncClock(mt); }  // frischer Media-Wert -> Anker nach
+      this.currentTime = this._clockNow();
       this.updatePlayhead();                 // nur Playhead bewegen (flüssig, kein Redraw)
       this._playRaf = requestAnimationFrame(step);
     };
@@ -1389,6 +1417,7 @@ Alpine.data('choreo', () => ({
   },
   stopPlayLoop() {
     if (this._playRaf) { cancelAnimationFrame(this._playRaf); this._playRaf = 0; }
+    this._clkP = null;                                     // Interpolation aus
     if (ws) this.currentTime = ws.getCurrentTime();        // exakte Endposition
     this.scheduleDraw();
   },
@@ -1411,7 +1440,9 @@ Alpine.data('choreo', () => ({
   },
 
   onTimeUpdate(t) {
-    this.currentTime = t;
+    // Während der Wiedergabe besitzt die interpolierte Uhr die currentTime
+    // (sonst würde der grobe Media-Wert den glatten Playhead 4x/s zurückreißen).
+    if (!this.isPlaying) this.currentTime = t;
     const segs = this.sortedSegments;
     let active = null;
     for (const s of segs) { if (Number(s.timestamp) <= t + 0.001) active = s; else break; }
