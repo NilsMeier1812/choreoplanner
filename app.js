@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 28;
+const APP_VERSION = 29;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -61,6 +61,7 @@ let laneCtx = null;
 let phWave = null, phLane = null;  // Playhead-DOM-Elemente (Welle + Spuren)
 let drawRaf = 0;                   // EINE rAF-Drossel für Grid + Lanes (gegen Ruckeln)
 let cachedPxPerSec = 0;            // Pixel/Sekunde – nur bei Zoom/Resize neu berechnet
+let webAudioFailed = false;        // WebAudio-Backend klappte nicht -> MediaElement-Fallback
 const lastFoot = { herren: null, damen: null };  // für Auto-Fußwechsel beim Eintragen
 let app = null;                    // Referenz auf die Alpine-Komponente
 let heartbeatTimer = null;
@@ -487,6 +488,16 @@ Alpine.data('choreo', () => ({
       this.loadAudioFromNetwork(this.project, loadToken);
       return;
     }
+    // 5. WebAudio-Backend konnte das Format nicht dekodieren -> einmalig auf
+    //    das <audio>-Element zurückfallen (spielt mehr Formate, dafür ohne
+    //    sample-genaue Zeitachse).
+    if (!webAudioFailed && this.project) {
+      webAudioFailed = true;
+      this.destroyWs();
+      this.createWs(this.project);
+      this.loadAudio(this.project);
+      return;
+    }
     clearTimeout(audioTimeout);
     this.audioLoading = false;
     this.audioError = navigator.onLine
@@ -515,7 +526,16 @@ Alpine.data('choreo', () => ({
       barGap: 1,
       barRadius: 2,
       minPxPerSec: this.zoom || 1,
-      fillParent: true
+      fillParent: true,
+      // WICHTIG: Wiedergabe über WebAudio statt <audio>-Element. Das <audio>-
+      // Element ist ein EIGENER Decoder mit eigener (Byte-/Bitrate-geschätzter)
+      // Zeitachse: bei MP3s (v.a. VBR) landet es nach einem Seek real an einer
+      // anderen Stelle als currentTime meldet -> Musik läuft der Waveform/dem
+      // Raster um einen scheinbar "musikalischen" Betrag voraus (hörbar als
+      // ~halber Takt, weil Musik periodisch ist). Der WebAudio-Player spielt
+      // denselben dekodierten Puffer ab, aus dem auch die Welle gezeichnet
+      // wird: Anzeige und Ton teilen sich EINE sample-genaue Zeitachse.
+      backend: webAudioFailed ? 'MediaElement' : 'WebAudio'
     });
     wsRegions = ws.registerPlugin(RegionsPlugin.create());
 
@@ -1373,6 +1393,14 @@ Alpine.data('choreo', () => ({
   },
   togglePlay() {
     if (!ws) return;
+    // iOS/Safari: der AudioContext des WebAudio-Players startet 'suspended'
+    // und darf nur in einer Nutzer-Geste geweckt werden (neuere Wavesurfer-
+    // Versionen machen das selbst; hier nur als Absicherung, no-op sonst).
+    try {
+      const m = ws.getMediaElement && ws.getMediaElement();
+      const ctx = m && m.audioContext;
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+    } catch (e) {}
     this.recalibrate();                                    // vor dem Start neu vermessen
     ws.playPause();
     requestAnimationFrame(() => this.recalibrate());       // nach dem Layout nochmal
