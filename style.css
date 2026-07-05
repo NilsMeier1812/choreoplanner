@@ -191,18 +191,31 @@ input:focus, textarea:focus, select:focus { outline: none; border-color: var(--a
 .disp-toggle .dd.m { width: 6px; height: 6px; }
 .disp-toggle .dd.l { width: 8px; height: 8px; }
 
-/* „＋ Marke" kompakt */
-.mark-btn {
-  height: 34px; padding: 0 12px; border-radius: 9px; font-size: 13px; font-weight: 600;
-  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
-}
-.mark-btn svg { display: block; }
-
 /* „⟲ Takt"-Sprung an Sprungmarke */
 .segment .ts.barback { background: var(--panel-2); color: var(--muted); }
 
-/* sichtbare Scrollbar im Wavesurfer-Scrollcontainer (Fallback/PC) */
-#waveform ::part(scroll) { scrollbar-width: thin; scrollbar-color: #555 transparent; }
+/* native Wavesurfer-Scrollbar ausblenden – gescrollt wird über die eigene
+   Leiste (#track-scroll) unter den Lanes bzw. per Wisch/Touch */
+#waveform ::part(scroll) { scrollbar-width: none; -ms-overflow-style: none; }
+#waveform ::part(scroll)::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+/* Horizontale Track-Scrollleiste (unter den Lanes) */
+#track-scroll { flex-shrink: 0; padding: 4px 10px 6px; background: var(--panel-2); border-top: 1px solid var(--border); }
+#track-scroll input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 10px; padding: 0; margin: 0;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+  cursor: pointer;
+}
+#track-scroll input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 44px; height: 14px; margin-top: -3px;
+  background: var(--accent); border-radius: 6px; cursor: grab;
+}
+#track-scroll input[type="range"]::-moz-range-thumb {
+  width: 44px; height: 14px; border: none;
+  background: var(--accent); border-radius: 6px; cursor: grab;
+}
 
 /* ===== Raster-Offset-Leiste (Editor) ===== */
 #grid-bar {
