@@ -61,7 +61,14 @@
     <div id="lanes">
       <span class="lane-label lane-h">L</span>
       <span class="lane-label lane-d">F</span>
+      <span class="lane-label lane-n">N</span>
       <div class="playhead" id="ph-lane"></div>
+    </div>
+
+    <!-- Horizontale Scrollleiste (unter den Lanes; sichtbar wenn reingezoomt) -->
+    <div id="track-scroll" x-show="canScroll" x-cloak>
+      <input type="range" min="0" max="1" step="0.001" :value="scrollPos"
+             @input="onScrollSlider($event.target.value)" aria-label="Track scrollen" />
     </div>
   </section>
 
@@ -83,10 +90,6 @@
     </button>
     <button class="icon" @click="zoomOut()" :disabled="!project" aria-label="Verkleinern">−</button>
     <button class="icon" @click="zoomIn()" :disabled="!project" aria-label="Vergrößern">+</button>
-    <button x-show="currentMode === 'editor'" class="mark-btn primary" @click="addSegmentAtCursor()">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-      Marke
-    </button>
   </div>
 
   <!-- ===== Unterer Bereich: Tabs ===== -->
@@ -105,6 +108,11 @@
           <span x-show="currentMode === 'editor' && lockOwned" class="badge lock">Du bearbeitest</span>
           <span x-show="currentMode === 'editor' && !lockOwned && !online" class="badge offline">Offline-Bearbeitung</span>
         </div>
+
+        <button x-show="currentMode === 'editor'" class="primary" style="width:100%;margin-bottom:12px" @click="addSegmentAtCursor()">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true" style="vertical-align:-2px;margin-right:4px"><path d="M12 5v14M5 12h14"/></svg>
+          Sprungmarke an aktueller Position
+        </button>
 
         <template x-if="project && sortedSegments.length === 0">
           <div class="empty">
@@ -147,7 +155,7 @@
 
         <!-- Paar-Auswahl: bestimmt, welche Schritte in den Spuren gezeigt werden -->
         <div class="field" style="margin-bottom:12px">
-          <label>Ich bin Paar</label>
+          <label>Schritte wählen</label>
           <select :value="myPersonNumber" @change="setMyPerson($event.target.value)">
             <option value="0">— Paar wählen —</option>
             <template x-for="p in sortedPersons" :key="p.id">
@@ -155,10 +163,13 @@
             </template>
           </select>
           <template x-if="myPersonNumber && myGroupTimeline.length">
+            <div>
+            <div class="section-title" style="margin:14px 0 6px">Abschnitte/Gruppen</div>
             <div class="grp-flow">
               <template x-for="(g, i) in myGroupTimeline" :key="i">
                 <span class="grp-step" :class="{ now: activePart && g === (myGroup ? groupNameOf(activePart, myGroup) : 'Alle gleich') }" x-text="g"></span>
               </template>
+            </div>
             </div>
           </template>
         </div>
@@ -176,13 +187,6 @@
             <span class="lg-dim">· Anzeige oben in der Leiste umschaltbar</span>
           </div>
         </div>
-
-        <template x-if="!isEditor">
-          <p class="empty">Zum Eintragen/Einrichten als Editor anmelden.</p>
-        </template>
-        <template x-if="isEditor && currentMode !== 'editor'">
-          <p class="empty">Oben in den <strong>Editor-Modus</strong> wechseln, um Schritte &amp; Gruppen zu bearbeiten.</p>
-        </template>
 
         <template x-if="currentMode === 'editor'">
           <div>
@@ -284,25 +288,14 @@
             </template>
           </div>
 
-          <!-- Audio-Versatz (pro Gerät, gegen Ton-Ausgabe-Latenz) -->
-          <div class="section-title">Audio-Versatz (Feinabgleich)</div>
-          <p class="hint">Nur falls Ton und Playhead minimal auseinanderliegen: <strong>−</strong> schiebt den Playhead nach vorne (wenn der Ton voraus ist), <strong>+</strong> nach hinten. Wird pro Gerät gespeichert.</p>
-          <div class="calib-row">
-            <button class="icon" @click="nudgeSync(-50)">−50</button>
-            <button class="icon" @click="nudgeSync(-10)">−10</button>
-            <span class="calib-val" x-text="syncOffset + ' ms'"></span>
-            <button class="icon" @click="nudgeSync(10)">+10</button>
-            <button class="icon" @click="nudgeSync(50)">+50</button>
-          </div>
-          <button style="width:100%;margin:2px 0 4px" @click="resetSync()">auf 0 zurücksetzen</button>
-
           <template x-for="p in projects" :key="p.id">
             <div class="project-item" :class="{ active: project && p.id === project.id }" @click="openProject(p)">
               <div class="pi-main">
                 <div class="pi-title" x-text="p.title"></div>
                 <div class="pi-meta" x-text="`${p.bpm} BPM · ${p.time_signature}`"></div>
               </div>
-              <button x-show="isEditor" class="icon danger" @click.stop="confirmDeleteProject(p)" aria-label="Projekt löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
+              <button x-show="isEditor" class="icon" @click.stop="duplicateProject(p)" aria-label="Projekt duplizieren" title="Projekt duplizieren"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+              <button x-show="isEditor" class="icon danger" @click.stop="askDeleteProject(p)" aria-label="Projekt löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
             </div>
           </template>
           <template x-if="projects.length === 0">
@@ -495,6 +488,32 @@
           <button class="primary" style="width:100%;margin-top:12px"
                   :disabled="!loginPassword || loggingIn" @click="doLogin()"
                   x-text="loggingIn ? 'Anmelden…' : 'Anmelden'"></button>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ===== Projekt löschen: Passwort-Bestätigung ===== -->
+  <template x-if="deleteTarget">
+    <div>
+      <div class="scrim" @click="cancelDeleteProject()"></div>
+      <div class="modal">
+        <header><h2>Projekt löschen</h2><button class="icon" @click="cancelDeleteProject()" aria-label="Schließen">✕</button></header>
+        <div class="body">
+          <p class="hint">Projekt „<strong x-text="deleteTarget.title"></strong>" und alle Schritte, Gruppen &amp; Sprungmarken werden gelöscht. Zum Bestätigen bitte das <strong>Editor-Passwort</strong> eingeben.</p>
+          <div class="pw-row">
+            <input :type="showDelPw ? 'text' : 'password'" x-model="deletePassword" placeholder="Editor-Passwort"
+                   autocomplete="current-password" @keydown.enter="doDeleteProject()" />
+            <button type="button" class="icon" @click="showDelPw = !showDelPw" :aria-label="showDelPw ? 'Passwort verbergen' : 'Passwort anzeigen'">
+              <svg x-show="!showDelPw" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg x-show="showDelPw" x-cloak viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20C5 20 1 12 1 12a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19M14.12 14.12A3 3 0 1 1 9.88 9.88"/><path d="M1 1l22 22"/></svg>
+            </button>
+          </div>
+          <div x-show="deleteError" style="color:var(--danger);font-size:13px;margin-top:8px" x-text="deleteError"></div>
+          <div class="calib-row" style="margin-top:12px">
+            <button style="flex:1" @click="cancelDeleteProject()">Abbrechen</button>
+            <button class="danger" style="flex:1" :disabled="!deletePassword || deleting" @click="doDeleteProject()" x-text="deleting ? 'Lösche…' : 'Endgültig löschen'"></button>
+          </div>
         </div>
       </div>
     </div>

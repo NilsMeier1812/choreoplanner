@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 29;
+const APP_VERSION = 30;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -135,7 +135,7 @@ Alpine.data('choreo', () => ({
   noteModalOpen: false,             // Popup zum Eintragen einer Notiz
   noteText: '',
   showMarkers: true,                // Sprungmarken in der Wellen-Anzeige zeigen
-  syncOffset: 0,                    // Audio-Versatz in ms (pro Gerät, gegen Ausgabe-Latenz)
+  syncOffset: 0,                    // Audio-Versatz in ms (Reserve; UI entfernt, bleibt 0)
 
   /* --- Playback / Modus --- */
   currentMode: 'training',          // 'training' | 'editor'
@@ -144,6 +144,15 @@ Alpine.data('choreo', () => ({
   duration: 0,
   activeSegmentId: null,
   zoom: 0,                          // minPxPerSec (0 = fit)
+  canScroll: false,                 // Welle breiter als Sichtfenster? (Scrollleiste zeigen)
+  scrollPos: 0,                     // horizontale Scroll-Position 0..1
+
+  /* --- Projekt löschen (Passwort-Bestätigung) --- */
+  deleteTarget: null,               // Projekt, das gelöscht werden soll
+  deletePassword: '',
+  deleteError: '',
+  deleting: false,
+  showDelPw: false,
   _projSaveTimer: null,
   _projPending: null,
 
@@ -250,7 +259,7 @@ Alpine.data('choreo', () => ({
       const u = uuid(); localStorage.setItem('choreo_user_id', u); return u;
     })();
     this.userName = localStorage.getItem('choreo_user_name') || '';
-    this.syncOffset = Number(localStorage.getItem('choreo_sync_offset')) || 0;
+    this.syncOffset = 0;              // manuelle Kalibrierung entfernt – WebAudio ist sample-genau
     if (!this.userName) this.nameModalOpen = true;
 
     // Netz-Listener
@@ -477,6 +486,7 @@ Alpine.data('choreo', () => ({
     this.resizeGridCanvas();
     this.resizeLaneCanvas();
     this.recomputeViewport();
+    this.refreshScroll();
     this.scheduleDraw();
   },
 
@@ -561,10 +571,11 @@ Alpine.data('choreo', () => ({
       // exakteste Quelle: Wavesurfers eigene Geometrie des Sichtfensters
       if (vEnd > vStart && sRight > sLeft) { cachedPxPerSec = (sRight - sLeft) / (vEnd - vStart); this._vpStartT = vStart; }
       else if (typeof vStart === 'number') this._vpStartT = vStart;
+      this.refreshScroll();
       this.scheduleDraw();
     });
-    ws.on('zoom', () => { this.recomputeViewport(); this.scheduleDraw(); });
-    ws.on('redraw', () => { this.recomputeViewport(); this.scheduleDraw(); });
+    ws.on('zoom', () => { this.recomputeViewport(); this.refreshScroll(); this.scheduleDraw(); });
+    ws.on('redraw', () => { this.recomputeViewport(); this.refreshScroll(); this.scheduleDraw(); });
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
@@ -608,6 +619,24 @@ Alpine.data('choreo', () => ({
   gridViewport() {
     if (!ws || !cachedPxPerSec) return null;
     return { startT: this._vpStartT || 0, pxPerSec: cachedPxPerSec };
+  },
+
+  /* Horizontale Scroll-Leiste (unter den Lanes) an die Welle koppeln.
+     Berechnung aus den bekannten Größen (cachedPxPerSec) statt scrollWidth. */
+  refreshScroll() {
+    if (!ws || !gridCanvas) { this.canScroll = false; return; }
+    const dur = ws.getDuration() || 0;
+    const viewW = gridCanvas.clientWidth || 0;
+    const maxPx = Math.max(0, cachedPxPerSec * dur - viewW);
+    this.canScroll = maxPx > 2;
+    this.scrollPos = maxPx > 0 ? Math.min(1, Math.max(0, (ws.getScroll() || 0) / maxPx)) : 0;
+  },
+  onScrollSlider(v) {
+    if (!ws || !gridCanvas) return;
+    const dur = ws.getDuration() || 0;
+    const viewW = gridCanvas.clientWidth || 0;
+    const maxPx = Math.max(0, cachedPxPerSec * dur - viewW);
+    ws.setScroll(Number(v) * maxPx);
   },
 
   // EIN gemeinsamer Redraw pro Frame -> Grid + Lanes teilen sich ein Viewport-Read
@@ -1067,6 +1096,11 @@ Alpine.data('choreo', () => ({
     const dur = ws.getDuration() || 0;
     const laneH = h / 3;   // drei Spuren: Leader / Follower / Notizen
 
+    // Ohne gewähltes Paar (und außerhalb des Editier-Modus) zeigen die Spuren
+    // keine Schritte, sondern nur den Hinweis „Bitte unten Paar auswählen".
+    const editing = this.currentMode === 'editor' && this.bottomTab === 'steps';
+    if (!editing && !this.myPersonNumber) { this.drawLanePlaceholder(w, h, laneH); return; }
+
     // schwache Taktlinien zur Ausrichtung mit der Welle
     laneCtx.strokeStyle = 'rgba(150,160,180,0.18)';
     laneCtx.lineWidth = 1;
@@ -1097,6 +1131,26 @@ Alpine.data('choreo', () => ({
     this.drawLaneSteps('damen', laneH, laneH, startT, pxPerSec, endT);
     this.drawNoteLane(2 * laneH, laneH, startT, pxPerSec, endT);
 
+  },
+  // Hinweis-Spuren, solange kein Paar gewählt ist: pro Spur wiederholt der Text.
+  drawLanePlaceholder(w, h, laneH) {
+    // dezente Trennlinien zwischen den drei Spuren
+    laneCtx.strokeStyle = 'rgba(255,255,255,0.10)';
+    laneCtx.lineWidth = 1;
+    for (let i = 1; i < 3; i++) { laneCtx.beginPath(); laneCtx.moveTo(0, laneH * i + 0.5); laneCtx.lineTo(w, laneH * i + 0.5); laneCtx.stroke(); }
+
+    laneCtx.save();
+    laneCtx.fillStyle = 'rgba(180,190,210,0.45)';
+    laneCtx.font = '13px -apple-system, sans-serif';
+    laneCtx.textAlign = 'left';
+    laneCtx.textBaseline = 'middle';
+    const msg = 'Bitte unten Paar auswählen';
+    const gap = laneCtx.measureText(msg + '      ').width;
+    for (let i = 0; i < 3; i++) {
+      const cy = i * laneH + laneH / 2;
+      for (let x = 26; x < w; x += gap) laneCtx.fillText(msg, x, cy);
+    }
+    laneCtx.restore();
   },
   drawLaneSteps(role, y0, laneH, startT, pxPerSec, endT) {
     const cy = y0 + laneH / 2;
@@ -1449,14 +1503,8 @@ Alpine.data('choreo', () => ({
     if (ws) this.currentTime = ws.getCurrentTime();        // exakte Endposition
     this.scheduleDraw();
   },
-  // sichtbare Playhead-Zeit = Abspielzeit minus Audio-Versatz (Ausgabe-Latenz)
+  // sichtbare Playhead-Zeit (syncOffset bleibt 0 – WebAudio ist sample-genau)
   phTime() { return Math.max(0, this.currentTime - (Number(this.syncOffset) || 0) / 1000); },
-  nudgeSync(d) {
-    this.syncOffset = Math.max(-2000, Math.min(2000, (Number(this.syncOffset) || 0) + d));
-    localStorage.setItem('choreo_sync_offset', this.syncOffset);
-    this.updatePlayhead();
-  },
-  resetSync() { this.syncOffset = 0; localStorage.setItem('choreo_sync_offset', 0); this.updatePlayhead(); },
   seekTo(t) { if (ws && this.duration) ws.setTime(Number(t)); },
   zoomIn() { this.zoom = Math.min(400, (this.zoom || 20) * 1.6); if (ws) ws.zoom(this.zoom); },
   zoomOut() { this.zoom = Math.max(1, (this.zoom || 20) / 1.6); if (ws) ws.zoom(this.zoom); },
@@ -1682,6 +1730,7 @@ Alpine.data('choreo', () => ({
     }
     this.currentMode = 'editor';
     this.renderRegions();
+    this.scheduleLaneDraw();
     if (this.lockOwned) this.startHeartbeat();
   },
 
@@ -1690,6 +1739,7 @@ Alpine.data('choreo', () => ({
     await this.releaseLock();
     this.currentMode = 'training';
     this.renderRegions();
+    this.scheduleLaneDraw();
   },
 
   async acquireLock() {
@@ -1855,9 +1905,104 @@ Alpine.data('choreo', () => ({
 
   abortUpload() { if (this._xhr) this._xhr.abort(); this.uploading = false; },
 
-  async confirmDeleteProject(p) {
-    if (!confirm(`Projekt „${p.title}" wirklich löschen? Alle Segmente gehen verloren.`)) return;
+  // Projekt duplizieren (nur Editor): alle abhängigen Datensätze mit neuen IDs
+  // kopieren; die Audiodatei wird geteilt (gleiche audio_url, keine 2. Kopie im
+  // Storage). Beim Löschen eines Projekts wird der Storage nicht angefasst.
+  async duplicateProject(p) {
+    if (!this.isEditor) return;
+    this.setStatus('Dupliziere Projekt…');
     try {
+      // 1. neues Projekt anlegen
+      const { data: np, error } = await sb.from('projects').insert({
+        title: (p.title || 'Projekt') + ' (Kopie)',
+        bpm: p.bpm, time_signature: p.time_signature, audio_url: p.audio_url
+      }).select().single();
+      if (error) throw error;
+      const npid = np.id;
+
+      // 2. abhängige Daten des Originals laden
+      const [tempo, persons, parts, steps, segments] = await Promise.all([
+        sb.from('tempo_sections').select('*').eq('project_id', p.id),
+        sb.from('persons').select('*').eq('project_id', p.id),
+        sb.from('parts').select('*').eq('project_id', p.id),
+        sb.from('steps').select('*').eq('project_id', p.id),
+        sb.from('choreo_segments').select('*').eq('project_id', p.id)
+      ]);
+      for (const r of [tempo, persons, parts, steps, segments]) if (r.error) throw r.error;
+
+      // 3. ID-Maps aufbauen und Zeilen umschreiben
+      const tsMap = {}, partMap = {};
+      const tempoRows = (tempo.data || []).map(s => {
+        const id = uuid(); tsMap[s.id] = id;
+        return { id, project_id: npid, sort_index: s.sort_index, label: s.label,
+          start_sec: s.start_sec, end_sec: s.end_sec, bpm: s.bpm,
+          time_signature: s.time_signature, offset_sec: s.offset_sec };
+      });
+      const personRows = (persons.data || []).map(x => ({ id: uuid(), project_id: npid, number: x.number, name: x.name }));
+      const partRows = (parts.data || []).map(pt => {
+        const id = uuid(); partMap[pt.id] = id;
+        return { id, project_id: npid, sort_index: pt.sort_index, label: pt.label,
+          start_sec: pt.start_sec, end_sec: pt.end_sec, group_names: pt.group_names };
+      });
+      let memberRows = [];
+      const oldPartIds = (parts.data || []).map(pt => pt.id);
+      if (oldPartIds.length) {
+        const mem = await sb.from('group_memberships').select('*').in('part_id', oldPartIds);
+        if (mem.error) throw mem.error;
+        memberRows = (mem.data || []).map(m => ({ id: uuid(), part_id: partMap[m.part_id],
+          person_number: m.person_number, group_number: m.group_number }));
+      }
+      const stepRows = (steps.data || []).map(st => ({ id: uuid(), project_id: npid,
+        tempo_section_id: tsMap[st.tempo_section_id] || null, role: st.role,
+        group_number: st.group_number, beat_pos: st.beat_pos, length_beats: st.length_beats,
+        foot: st.foot, value: st.value }));
+      const segRows = (segments.data || []).map(sg => ({ id: uuid(), project_id: npid,
+        timestamp: sg.timestamp, label: sg.label, notes: sg.notes }));
+
+      // 4. einfügen (Eltern zuerst)
+      const ins = async (table, rows) => { if (rows.length) { const r = await sb.from(table).insert(rows); if (r.error) throw r.error; } };
+      await ins('tempo_sections', tempoRows);
+      await ins('persons', personRows);
+      await ins('parts', partRows);
+      await ins('group_memberships', memberRows);
+      await ins('steps', stepRows);
+      await ins('choreo_segments', segRows);
+
+      // 5. Audio-Blob lokal für das neue Projekt spiegeln (sofort offline nutzbar)
+      const cached = await db.audioCache.get(p.id).catch(() => null);
+      if (cached && cached.blob) await db.audioCache.put({ projectId: npid, blob: cached.blob, cachedAt: Date.now() }).catch(() => {});
+
+      await this.loadProjects();
+      this.setStatus('Projekt dupliziert');
+    } catch (e) {
+      this.setStatus('Duplizieren fehlgeschlagen' + (navigator.onLine ? '' : ' (offline?)'));
+    }
+  },
+
+  // Löschen erst nach erneuter Editor-Passwort-Eingabe (Schutz vor Versehen).
+  askDeleteProject(p) {
+    if (!this.isEditor) return;
+    this.deleteTarget = p;
+    this.deletePassword = '';
+    this.deleteError = '';
+    this.showDelPw = false;
+    this.deleting = false;
+  },
+  cancelDeleteProject() {
+    this.deleteTarget = null;
+    this.deletePassword = '';
+    this.deleteError = '';
+  },
+  async doDeleteProject() {
+    const p = this.deleteTarget;
+    if (!p || this.deleting) return;
+    if (!this.deletePassword) { this.deleteError = 'Bitte Passwort eingeben.'; return; }
+    this.deleting = true; this.deleteError = '';
+    try {
+      // Passwort gegen den Editor-Login prüfen (keine Extra-Rechte, nur Bestätigung)
+      const { error: authErr } = await sb.auth.signInWithPassword({ email: EDITOR_EMAIL, password: this.deletePassword });
+      if (authErr) { this.deleteError = 'Passwort falsch.'; this.deleting = false; return; }
+
       const { error } = await sb.from('projects').delete().eq('id', p.id);
       if (error) throw error;
       await db.audioCache.delete(p.id).catch(() => {});
@@ -1868,9 +2013,13 @@ Alpine.data('choreo', () => ({
         this.segments = [];
       }
       await this.loadProjects();
+      this.deleteTarget = null;
+      this.deletePassword = '';
+      this.deleting = false;
       this.setStatus('Projekt gelöscht');
     } catch (e) {
-      this.setStatus('Löschen fehlgeschlagen (offline?)');
+      this.deleting = false;
+      this.deleteError = 'Löschen fehlgeschlagen (offline?).';
     }
   },
 
