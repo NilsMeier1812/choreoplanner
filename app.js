@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 30;
+const APP_VERSION = 31;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -144,8 +144,6 @@ Alpine.data('choreo', () => ({
   duration: 0,
   activeSegmentId: null,
   zoom: 0,                          // minPxPerSec (0 = fit)
-  canScroll: false,                 // Welle breiter als Sichtfenster? (Scrollleiste zeigen)
-  scrollPos: 0,                     // horizontale Scroll-Position 0..1
 
   /* --- Projekt löschen (Passwort-Bestätigung) --- */
   deleteTarget: null,               // Projekt, das gelöscht werden soll
@@ -486,7 +484,6 @@ Alpine.data('choreo', () => ({
     this.resizeGridCanvas();
     this.resizeLaneCanvas();
     this.recomputeViewport();
-    this.refreshScroll();
     this.scheduleDraw();
   },
 
@@ -571,11 +568,10 @@ Alpine.data('choreo', () => ({
       // exakteste Quelle: Wavesurfers eigene Geometrie des Sichtfensters
       if (vEnd > vStart && sRight > sLeft) { cachedPxPerSec = (sRight - sLeft) / (vEnd - vStart); this._vpStartT = vStart; }
       else if (typeof vStart === 'number') this._vpStartT = vStart;
-      this.refreshScroll();
       this.scheduleDraw();
     });
-    ws.on('zoom', () => { this.recomputeViewport(); this.refreshScroll(); this.scheduleDraw(); });
-    ws.on('redraw', () => { this.recomputeViewport(); this.refreshScroll(); this.scheduleDraw(); });
+    ws.on('zoom', () => { this.recomputeViewport(); this.scheduleDraw(); });
+    ws.on('redraw', () => { this.recomputeViewport(); this.scheduleDraw(); });
 
     wsRegions.on('region-updated', (r) => this.onRegionMoved(r));
     wsRegions.on('region-clicked', (r, e) => { e.stopPropagation(); ws.setTime(r.start); this.selectSegment(r.id); });
@@ -619,24 +615,6 @@ Alpine.data('choreo', () => ({
   gridViewport() {
     if (!ws || !cachedPxPerSec) return null;
     return { startT: this._vpStartT || 0, pxPerSec: cachedPxPerSec };
-  },
-
-  /* Horizontale Scroll-Leiste (unter den Lanes) an die Welle koppeln.
-     Berechnung aus den bekannten Größen (cachedPxPerSec) statt scrollWidth. */
-  refreshScroll() {
-    if (!ws || !gridCanvas) { this.canScroll = false; return; }
-    const dur = ws.getDuration() || 0;
-    const viewW = gridCanvas.clientWidth || 0;
-    const maxPx = Math.max(0, cachedPxPerSec * dur - viewW);
-    this.canScroll = maxPx > 2;
-    this.scrollPos = maxPx > 0 ? Math.min(1, Math.max(0, (ws.getScroll() || 0) / maxPx)) : 0;
-  },
-  onScrollSlider(v) {
-    if (!ws || !gridCanvas) return;
-    const dur = ws.getDuration() || 0;
-    const viewW = gridCanvas.clientWidth || 0;
-    const maxPx = Math.max(0, cachedPxPerSec * dur - viewW);
-    ws.setScroll(Number(v) * maxPx);
   },
 
   // EIN gemeinsamer Redraw pro Frame -> Grid + Lanes teilen sich ein Viewport-Read
