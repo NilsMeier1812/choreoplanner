@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 32;
+const APP_VERSION = 33;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -304,7 +304,8 @@ Alpine.data('choreo', () => ({
     if (this.online) this.processSyncQueue();
 
     const last = localStorage.getItem('choreo_last_project');
-    const target = this.projects.find(p => p.id === last) || this.projects[0];
+    const visible = this.visibleProjects;
+    const target = visible.find(p => p.id === last) || visible[0];
     if (target) await this.openProject(target);
   },
 
@@ -370,6 +371,11 @@ Alpine.data('choreo', () => ({
       this.projects = await db.projects.toArray().catch(() => []);
       if (!this.projects.length) this.setStatus('Offline – keine Projekte im Cache');
     }
+  },
+
+  // Nicht angemeldet: private Projekte ausblenden. Angemeldet: alle sehen.
+  get visibleProjects() {
+    return (this.projects || []).filter(p => this.isEditor || !p.is_private);
   },
 
   async openProject(p) {
@@ -1887,7 +1893,8 @@ Alpine.data('choreo', () => ({
       // 1. neues Projekt anlegen
       const { data: np, error } = await sb.from('projects').insert({
         title: (p.title || 'Projekt') + ' (Kopie)',
-        bpm: p.bpm, time_signature: p.time_signature, audio_url: p.audio_url
+        bpm: p.bpm, time_signature: p.time_signature, audio_url: p.audio_url,
+        ...(p.is_private ? { is_private: true } : {})
       }).select().single();
       if (error) throw error;
       const npid = np.id;

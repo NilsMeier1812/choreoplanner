@@ -281,17 +281,17 @@
             </template>
           </div>
 
-          <template x-for="p in projects" :key="p.id">
+          <template x-for="p in visibleProjects" :key="p.id">
             <div class="project-item" :class="{ active: project && p.id === project.id }" @click="openProject(p)">
               <div class="pi-main">
                 <div class="pi-title" x-text="p.title"></div>
-                <div class="pi-meta" x-text="`${p.bpm} BPM · ${p.time_signature}`"></div>
+                <div class="pi-meta" x-text="`${p.bpm} BPM · ${p.time_signature}` + (p.is_private ? ' · privat' : '')"></div>
               </div>
               <button x-show="isEditor" class="icon" @click.stop="duplicateProject(p)" aria-label="Projekt duplizieren" title="Projekt duplizieren"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
               <button x-show="isEditor" class="icon danger" @click.stop="askDeleteProject(p)" aria-label="Projekt löschen"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/></svg></button>
             </div>
           </template>
-          <template x-if="projects.length === 0">
+          <template x-if="visibleProjects.length === 0">
             <div class="empty" style="padding:20px 0" x-text="online ? 'Noch keine Projekte.' : 'Offline – keine zwischengespeicherten Projekte.'"></div>
           </template>
 
@@ -360,6 +360,15 @@
           <div class="field">
             <label>Titel</label>
             <input type="text" :value="project.title" @input="patchProject({ title: $event.target.value })" />
+          </div>
+
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" :checked="!!project.is_private"
+                     @change="patchProject({ is_private: $event.target.checked })"
+                     style="width:auto;margin:0" />
+              <span>Privat – nur für Angemeldete sichtbar</span>
+            </label>
           </div>
 
           <div class="section-title">Tempo-Abschnitte (Lieder)</div>
