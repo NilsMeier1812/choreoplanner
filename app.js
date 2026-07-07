@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 31;
+const APP_VERSION = 32;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
@@ -99,8 +99,6 @@ Alpine.data('choreo', () => ({
   /* --- Identität --- */
   userId: '',
   userName: '',
-  nameModalOpen: false,
-  nameInput: '',
 
   /* --- UI --- */
   version: APP_VERSION,
@@ -111,6 +109,7 @@ Alpine.data('choreo', () => ({
   isEditor: false,
   loginOpen: false,
   loginPassword: '',
+  loginName: '',
   loginError: '',
   loggingIn: false,
   showPw: false,
@@ -258,7 +257,6 @@ Alpine.data('choreo', () => ({
     })();
     this.userName = localStorage.getItem('choreo_user_name') || '';
     this.syncOffset = 0;              // manuelle Kalibrierung entfernt – WebAudio ist sample-genau
-    if (!this.userName) this.nameModalOpen = true;
 
     // Netz-Listener
     window.addEventListener('online', () => { this.online = true; this.setStatus('Wieder online – synchronisiere…'); this.processSyncQueue(); });
@@ -310,14 +308,6 @@ Alpine.data('choreo', () => ({
     if (target) await this.openProject(target);
   },
 
-  saveName() {
-    const n = this.nameInput.trim();
-    if (!n) return;
-    this.userName = n;
-    localStorage.setItem('choreo_user_name', n);
-    this.nameModalOpen = false;
-  },
-
   /* ===================== Auth / Editor-Login ===================== */
   async initAuth() {
     try {
@@ -333,7 +323,7 @@ Alpine.data('choreo', () => ({
     });
   },
 
-  openLogin() { this.loginError = ''; this.loginPassword = ''; this.showPw = false; this.loginOpen = true; },
+  openLogin() { this.loginError = ''; this.loginPassword = ''; this.loginName = this.userName || ''; this.showPw = false; this.loginOpen = true; },
   closeLogin() { this.loginOpen = false; },
 
   async doLogin() {
@@ -343,7 +333,11 @@ Alpine.data('choreo', () => ({
     try {
       const { error } = await sb.auth.signInWithPassword({ email: EDITOR_EMAIL, password: pw });
       if (error) throw error;
+      // Name ist optional: leer lassen ist ok -> Anzeige „wer bearbeitet" bleibt dann leer.
+      this.userName = (this.loginName || '').trim();
+      localStorage.setItem('choreo_user_name', this.userName);
       this.loginPassword = '';
+      this.loginName = '';
       this.loginOpen = false;
       // NICHT automatisch in den Editor wechseln – angemeldet sein heißt nur,
       // dass man bearbeiten DARF. Training/Editor wählt man weiter über den Umschalter.
@@ -1695,7 +1689,7 @@ Alpine.data('choreo', () => ({
     try {
       const ok = await this.acquireLock();
       if (!ok) {
-        this.setStatus(`Gesperrt – wird von ${this.lockedByOther} bearbeitet`);
+        this.setStatus(this.lockedByOther ? `Gesperrt – wird von ${this.lockedByOther} bearbeitet` : 'Gesperrt – wird gerade bearbeitet');
         return;
       }
     } catch (e) {
@@ -1732,7 +1726,7 @@ Alpine.data('choreo', () => ({
     if (data && data.length) { this.lockOwned = true; this.lockedByOther = null; return true; }
     // Wer hält den Lock?
     const { data: cur } = await sb.from('projects').select('locked_by_name').eq('id', this.project.id).single();
-    this.lockedByOther = (cur && cur.locked_by_name) || 'jemand anderem';
+    this.lockedByOther = (cur && cur.locked_by_name) || '';
     this.lockOwned = false;
     return false;
   },

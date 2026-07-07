@@ -444,23 +444,6 @@
     </div>
   </template>
 
-  <!-- ===== Name-Modal (einmalig) ===== -->
-  <template x-if="nameModalOpen">
-    <div>
-      <div class="scrim"></div>
-      <div class="modal">
-        <header><h2>Willkommen</h2></header>
-        <div class="body">
-          <p style="margin-top:0;color:var(--muted);font-size:14px">
-            Sag uns deinen Namen – so sehen Mitnutzer, wer ein Projekt gerade bearbeitet.
-          </p>
-          <input type="text" x-model="nameInput" placeholder="Dein Name" @keydown.enter="saveName()" />
-          <button class="primary" style="width:100%;margin-top:12px" :disabled="!nameInput.trim()" @click="saveName()">Los geht's</button>
-        </div>
-      </div>
-    </div>
-  </template>
-
   <!-- ===== Editor-Login ===== -->
   <template x-if="loginOpen">
     <div>
@@ -469,6 +452,8 @@
         <header><h2>Editor anmelden <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></h2><button class="icon" @click="closeLogin()" aria-label="Schließen">✕</button></header>
         <div class="body">
           <p class="hint">Bearbeiten ist nur mit dem gemeinsamen Editor-Passwort möglich. Ansehen &amp; Training geht für alle ohne Login.</p>
+          <input type="text" x-model="loginName" placeholder="Dein Name (optional)" autocomplete="name"
+                 @keydown.enter="doLogin()" style="margin-bottom:8px" />
           <div class="pw-row">
             <input :type="showPw ? 'text' : 'password'" x-model="loginPassword" placeholder="Editor-Passwort"
                    autocomplete="current-password" @keydown.enter="doLogin()" />
