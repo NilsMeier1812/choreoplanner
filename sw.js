@@ -7,7 +7,7 @@
    - Supabase REST/Storage -> Netz (kein SW-Cache; Audio liegt in IndexedDB/Dexie).
    ========================================================================== */
 
-const VERSION = 'v33';
+const VERSION = 'v34';
 const SHELL_CACHE = `choreo-shell-${VERSION}`;
 const CDN_CACHE = `choreo-cdn-${VERSION}`;
 
@@ -46,6 +46,9 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
 
   const url = new URL(req.url);
+
+  // Vercel Analytics/Insights immer direkt übers Netz – nie cachen/abfangen.
+  if (url.pathname.startsWith('/_vercel/')) return;
 
   // Supabase (REST / Auth / Storage) immer übers Netz – nie cachen.
   if (url.hostname.endsWith('.supabase.co')) return;
