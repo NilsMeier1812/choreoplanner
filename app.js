@@ -11,7 +11,7 @@ import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesu
 import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/plugins/regions.esm.js';
 
 /* ---------- App-Version (hochzählend; zur Cache-/Update-Kontrolle) ---------- */
-const APP_VERSION = 33;
+const APP_VERSION = 34;
 
 /* ---------- Supabase ---------- */
 const SUPABASE_URL = 'https://qgklrvagzfvqbbpgpfdl.supabase.co';
